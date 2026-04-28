@@ -142,6 +142,6 @@ def health():
     return jsonify({"status": "running", "time": time.strftime("%Y-%m-%d %H:%M UTC")})
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
+    port = int(os.getenv("PORT", 8080))
     print(f"Sunucu başlatılıyor → http://0.0.0.0:{port}/webhook")
     app.run(host="0.0.0.0", port=port, debug=False)
