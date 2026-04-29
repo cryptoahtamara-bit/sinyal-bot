@@ -11,7 +11,19 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
 KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
 KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
-TP_KONTROL_DK    = int(os.getenv("TP_KONTROL_DK", "15"))
+def tp_sure(timeframe: str) -> int:
+    """Timeframe'e göre TP kontrol süresi (dakika)"""
+    tf = str(timeframe)
+    if tf in ["1", "3"]:       return 15
+    if tf in ["5"]:            return 30
+    if tf in ["15"]:           return 60
+    if tf in ["30"]:           return 120
+    if tf in ["60", "1H"]:     return 240
+    if tf in ["120"]:          return 480
+    if tf in ["240"]:          return 1440
+    if tf in ["D", "1D"]:      return 4320
+    if tf in ["W", "1W"]:      return 10080
+    return 15
 
 son_sinyal = {"key": "", "zaman": 0}
 
@@ -255,9 +267,10 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal, tp1, tp2, 
     # TP'ler varsa 15 dk sonra kontrol et
     if message_id and any([tp1, tp2, tp3]):
         sinyal_ts = int(time.time())
+        kontrol_dk = tp_sure(timeframe)
         t = threading.Thread(
             target=tp_kontrol_gonder,
-            args=(symbol, sinyal, tp1, tp2, tp3, message_id, TP_KONTROL_DK, sinyal_ts)
+            args=(symbol, sinyal, tp1, tp2, tp3, message_id, kontrol_dk, sinyal_ts)
         )
         t.daemon = True
         t.start()
