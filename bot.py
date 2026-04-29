@@ -76,7 +76,7 @@ def format_mesaj(symbol, price, timeframe, sinyal, tp1=None, tp2=None, tp3=None)
         + (f"🎯 TP1: {tp1}\n" if tp1 else "")
         + (f"🎯 TP2: {tp2}\n" if tp2 else "")
         + (f"🎯 TP3: {tp3}\n" if tp3 else "")
-        + f"\nSizde kulübe katılıp, alarmları kaçırmamak isterseniz lütfen iletişime geçin. {KANAL_TAG}"
+        + f"\nSizde kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin. {KANAL_TAG}"
     )
 
 def send_telegram(caption: str, symbol: str, timeframe: str, imageurl: str = None):
