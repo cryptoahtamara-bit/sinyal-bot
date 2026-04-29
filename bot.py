@@ -1,6 +1,12 @@
 import os, time, json, re, threading, requests
+from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+try:
+    import pytz
+    TR_TZ = pytz.timezone("Europe/Istanbul")
+except:
+    TR_TZ = None
 
 load_dotenv()
 
@@ -26,6 +32,152 @@ def tp_sure(timeframe: str) -> int:
     return 15
 
 son_sinyal = {"key": "", "zaman": 0}
+
+# Günlük sinyal kaydı
+gunluk_sinyaller = []
+gunluk_kilit = threading.Lock()
+
+def gun_str(ts=None):
+    """TR saati ile gün string'i: 2024-04-30"""
+    if TR_TZ:
+        dt = datetime.fromtimestamp(ts or time.time(), tz=TR_TZ)
+    else:
+        dt = datetime.utcfromtimestamp(ts or time.time())
+    return dt.strftime("%Y-%m-%d")
+
+def sinyal_kaydet(symbol, sinyal, timeframe, price, tp1, tp2, tp3, message_id):
+    """Sinyali günlük kayda ekle"""
+    with gunluk_kilit:
+        gunluk_sinyaller.append({
+            "gun": gun_str(),
+            "zaman": time.time(),
+            "symbol": symbol,
+            "sinyal": sinyal,
+            "timeframe": timeframe,
+            "price": price,
+            "tp1": tp1, "tp2": tp2, "tp3": tp3,
+            "tp1_ok": None, "tp2_ok": None, "tp3_ok": None,
+            "message_id": message_id
+        })
+
+def tp_sonuc_guncelle(message_id, tp1_ok, tp2_ok, tp3_ok):
+    """TP sonuçlarını güncelle"""
+    with gunluk_kilit:
+        for s in gunluk_sinyaller:
+            if s["message_id"] == message_id:
+                s["tp1_ok"] = tp1_ok
+                s["tp2_ok"] = tp2_ok
+                s["tp3_ok"] = tp3_ok
+                break
+
+def gunluk_ozet_gonder():
+    """Her gün 12:00 ve 23:59 TR saatinde özet gönder"""
+    while True:
+        try:
+            if TR_TZ:
+                simdi = datetime.now(tz=TR_TZ)
+            else:
+                simdi = datetime.utcnow()
+
+            # Sonraki hedef saati bul (12:00 veya 23:59)
+            hedefler = [
+                simdi.replace(hour=12, minute=0, second=0, microsecond=0),
+                simdi.replace(hour=23, minute=59, second=0, microsecond=0),
+            ]
+            # Henüz geçmemiş en yakın hedefi seç
+            gelecek = [h for h in hedefler if h > simdi]
+            if gelecek:
+                hedef = min(gelecek)
+            else:
+                # İkisi de geçtiyse yarın 12:00
+                import datetime as dt_mod
+                yarin = simdi + dt_mod.timedelta(days=1)
+                hedef = yarin.replace(hour=12, minute=0, second=0, microsecond=0)
+
+            bekle = (hedef - simdi).total_seconds()
+            print(f"[OZET] Sonraki özet: {hedef.strftime('%H:%M')} TR ({int(bekle//60)} dk sonra)")
+            time.sleep(bekle)
+            _ozet_gonder()
+            time.sleep(70)  # Aynı dakikada tekrar tetiklenmesin
+        except Exception as e:
+            print(f"[OZET] Hata: {e}")
+            time.sleep(60)
+
+def _ozet_gonder():
+    """Günlük özet tablosunu oluştur ve gönder"""
+    bugun = gun_str()
+    with gunluk_kilit:
+        bugun_sinyaller = [s for s in gunluk_sinyaller if s["gun"] == bugun]
+    
+    if not bugun_sinyaller:
+        print("[OZET] Bugün sinyal yok, özet gönderilmedi.")
+        return
+
+    toplam = len(bugun_sinyaller)
+    tp_olan = 0
+    tp_kontrol_yapilan = 0
+
+    satirlar = []
+    for s in bugun_sinyaller:
+        if TR_TZ:
+            dt = datetime.fromtimestamp(s["zaman"], tz=TR_TZ)
+        else:
+            dt = datetime.utcfromtimestamp(s["zaman"])
+        saat = dt.strftime("%H:%M")
+        
+        sym = s["symbol"].replace("USDT.P","").replace("USDT","")
+        sin = s["sinyal"]
+        
+        # TP durumu
+        tp_kontrol = s["tp1_ok"] is not None or s["tp2_ok"] is not None or s["tp3_ok"] is not None
+        if tp_kontrol:
+            tp_kontrol_yapilan += 1
+            tp_gerceklesen = sum([
+                1 for x in [s["tp1_ok"], s["tp2_ok"], s["tp3_ok"]]
+                if x is True
+            ])
+            tp_toplam = sum([
+                1 for x in [s["tp1"], s["tp2"], s["tp3"]]
+                if x is not None
+            ])
+            if tp_gerceklesen > 0:
+                tp_olan += 1
+            tp_durum = f"{tp_gerceklesen}/{tp_toplam} TP"
+        else:
+            tp_durum = "⏳ Bekleniyor"
+        
+        satirlar.append(f"{saat} | {sym} | {sin[:8]} | {tp_durum}")
+
+    basari = round((tp_olan / tp_kontrol_yapilan * 100), 1) if tp_kontrol_yapilan > 0 else 0
+
+    mesaj = f"\U0001f4c5 <b>Gunluk Ozet - {bugun}</b>\n\n"
+    mesaj += f"\U0001f4ca Toplam Sinyal: <b>{toplam}</b>\n"
+    mesaj += f"\u2705 TP Basarili: <b>{tp_olan}</b> / {tp_kontrol_yapilan}\n"
+    mesaj += f"\U0001f3af Basari Orani: <b>%{basari}</b>\n\n"
+    mesaj += "<code>"
+    mesaj += "Saat | Sembol | Sinyal   | Sonuc\n"
+    mesaj += "-" * 38 + "\n"
+    mesaj += "\n".join(satirlar)
+    mesaj += "</code>"
+
+    base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+    try:
+        resp = requests.post(
+            f"{base}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": mesaj, "parse_mode": "HTML"},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            print(f"[OZET] Günlük özet gönderildi. {toplam} sinyal.")
+        else:
+            print(f"[OZET] Hata: {resp.status_code}")
+    except Exception as e:
+        print(f"[OZET] Gönderim hatası: {e}")
+
+    # Eski kayıtları temizle (3 günden eski)
+    sinir = time.time() - 3 * 86400
+    with gunluk_kilit:
+        gunluk_sinyaller[:] = [s for s in gunluk_sinyaller if s["zaman"] > sinir]
 
 def get_screenshot_chartimg(symbol: str, timeframe: str):
     if not CHARTIMG_KEY:
@@ -230,8 +382,11 @@ def tp_kontrol_gonder(symbol, sinyal, tp1, tp2, tp3, message_id, dakika, sinyal_
             print(f"[TP] Hata: {resp.status_code} — {resp.text}")
     except Exception as e:
         print(f"[TP] Gönderim hatası: {e}")
+    
+    # Günlük kayda TP sonuçlarını işle
+    tp_sonuc_guncelle(message_id, tp1_ok, tp2_ok, tp3_ok)
 
-def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal, tp1, tp2, tp3, imageurl=None):
+def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal, tp1, tp2, tp3, imageurl=None, price=None):
     base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
     img_data = None
     if imageurl:
@@ -264,7 +419,11 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal, tp1, tp2, 
         print(f"[HATA] send_telegram: {e}")
         return
 
-    # TP'ler varsa 15 dk sonra kontrol et
+    # Günlük kayda ekle
+    if message_id:
+        sinyal_kaydet(symbol, sinyal, timeframe, price, tp1, tp2, tp3, message_id)
+
+    # TP'ler varsa kontrol et
     if message_id and any([tp1, tp2, tp3]):
         sinyal_ts = int(time.time())
         kontrol_dk = tp_sure(timeframe)
@@ -351,7 +510,7 @@ def webhook():
 
     t = threading.Thread(
         target=send_telegram_and_schedule_tp,
-        args=(mesaj, symbol, timeframe, sinyal, tp1, tp2, tp3, imageurl)
+        args=(mesaj, symbol, timeframe, sinyal, tp1, tp2, tp3, imageurl, price)
     )
     t.daemon = True
     t.start()
@@ -364,5 +523,8 @@ def health():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
+    # Günlük özet thread'i başlat
+    ozet_thread = threading.Thread(target=gunluk_ozet_gonder, daemon=True)
+    ozet_thread.start()
     print(f"Sunucu başlatılıyor → http://0.0.0.0:{port}/webhook")
     app.run(host="0.0.0.0", port=port, debug=False)
