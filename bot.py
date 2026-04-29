@@ -1,4 +1,4 @@
-import os, time, requests
+import os, time, json, requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 
@@ -13,17 +13,18 @@ KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
 KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
 
 # ─── chart-img.com ile screenshot ─────────────────────────────
-def get_screenshot(symbol: str, timeframe: str) -> bytes | None:
+def get_screenshot(symbol: str, timeframe: str):
     if not CHARTIMG_KEY:
         return None
 
     tf_map = {
         "1": "1m", "3": "3m", "5": "5m", "15": "15m", "30": "30m",
-        "60": "1h", "120": "2h", "240": "4h", "D": "1D", "W": "1W", "M": "1M"
+        "60": "1h", "1H": "1h", "120": "2h", "240": "4h",
+        "D": "1D", "1D": "1D", "W": "1W", "M": "1M"
     }
     tf = tf_map.get(str(timeframe), "1h")
 
-    sym = symbol.upper()
+    sym = symbol.upper().replace(".P", "").replace("USDT.P", "USDT")
     if not any(x in sym for x in [":", "BINANCE", "BYBIT"]):
         sym = f"BINANCE:{sym}"
 
@@ -47,46 +48,23 @@ def get_screenshot(symbol: str, timeframe: str) -> bytes | None:
         print(f"[SCREENSHOT] İstek hatası: {e}")
         return None
 
+# ─── Sinyal emojisi ────────────────────────────────────────────
+def sinyal_emoji(sinyal: str) -> str:
+    s = sinyal.upper().replace(" ", "_").replace("-", "_")
+    if "STRONG_BUY" in s or "STRONG BUY" in s:
+        return "🔥 STRONG BUY"
+    if "STRONG_SELL" in s or "STRONG SELL" in s:
+        return "💀 STRONG SELL"
+    if "LONG" in s or "BUY" in s:
+        return "🚀 LONG"
+    if "SHORT" in s or "SELL" in s:
+        return "📉 SHORT"
+    return sinyal
+
 # ─── Telegram Gönderici ────────────────────────────────────────
-def send_telegram(signal: dict) -> bool:
-    sym  = signal.get("symbol", "?")
-    tf   = signal.get("timeframe", "?")
-    side = signal.get("signal", "?")
-    px   = signal.get("price", 0)
-
-    # Zaman dilimi Türkçe
-    tf_map = {
-        "1": "1 DK", "3": "3 DK", "5": "5 DK", "15": "15 DK", "30": "30 DK",
-        "60": "1 SAAT", "120": "2 SAAT", "240": "4 SAAT", "D": "1 GÜN", "W": "1 HAFTA"
-    }
-    tf_tr = tf_map.get(str(tf), tf)
-
-    # Sinyal türü
-    if side == "STRONG_BUY":
-        side_tr = "STRONG BUY"
-        side_emoji = "🔥"
-    elif side == "LONG":
-        side_tr = "LONG"
-        side_emoji = "🚀"
-    elif side == "STRONG_SELL":
-        side_tr = "STRONG SELL"
-        side_emoji = "💀"
-    else:
-        side_tr = "SHORT"
-        side_emoji = "📉"
-
-    caption = (
-        f"❗ <b>{KANAL_ADI}</b> ❗\n\n"
-        f"⚡ {sym}\n"
-        f"💰 {px}\n"
-        f"⏰ {tf_tr}\n"
-        f"{side_emoji} {side_tr}\n\n"
-        f"Sizde kulübe katılıp, alarmları kaçırmamak isterseniz lütfen "
-        f"iletişime geçin. {KANAL_TAG}"
-    )
-
+def send_telegram(caption: str, symbol: str, timeframe: str) -> bool:
     base     = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-    img_data = get_screenshot(sym, tf)
+    img_data = get_screenshot(symbol, timeframe)
 
     if img_data:
         resp = requests.post(
@@ -103,27 +81,94 @@ def send_telegram(signal: dict) -> bool:
         )
 
     if resp.status_code == 200:
-        print(f"[OK] {sym} {side} sinyali gönderildi.")
+        print(f"[OK] {symbol} sinyali gönderildi.")
         return True
     else:
         print(f"[HATA] Telegram: {resp.status_code} — {resp.text}")
         return False
 
+# ─── Mesaj formatla ────────────────────────────────────────────
+def format_mesaj(symbol, price, timeframe, sinyal):
+    tf_map = {
+        "1": "1 DK", "3": "3 DK", "5": "5 DK", "15": "15 DK",
+        "30": "30 DK", "60": "1 SAAT", "1H": "1 SAAT",
+        "120": "2 SAAT", "240": "4 SAAT", "D": "1 GÜN", "1D": "1 GÜN",
+        "W": "1 HAFTA", "1W": "1 HAFTA"
+    }
+    tf_goster = tf_map.get(str(timeframe), timeframe)
+
+    return (
+        f"❗ {KANAL_ADI} ❗\n\n"
+        f"⚡ {symbol}\n"
+        f"💰 {price}\n"
+        f"⏰ {tf_goster}\n"
+        f"{sinyal_emoji(sinyal)}\n\n"
+        f"Sizde kulübe katılıp, alarmları kaçırmamak isterseniz lütfen iletişime geçin. {KANAL_TAG}"
+    )
+
 # ─── Webhook ──────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "JSON bekleniyor"}), 400
+    raw = request.get_data(as_text=True).strip()
+    print(f"[WEBHOOK] Ham veri: {raw[:200]}")
 
-    print(f"[WEBHOOK] Gelen sinyal: {data}")
+    symbol    = "BTCUSDT"
+    timeframe = "60"
+    sinyal    = "SINYAL"
+    price     = "?"
 
-    required = ["symbol", "signal", "price"]
-    missing  = [f for f in required if f not in data]
-    if missing:
-        return jsonify({"error": f"Eksik alanlar: {missing}"}), 400
+    # --- 1) JSON FORMAT dene ---
+    parsed_json = None
+    try:
+        parsed_json = json.loads(raw)
+    except Exception:
+        # Content-Type json ama body düz metin olabilir
+        pass
 
-    ok = send_telegram(data)
+    if parsed_json and isinstance(parsed_json, dict):
+        symbol    = parsed_json.get("symbol", parsed_json.get("ticker", symbol))
+        timeframe = str(parsed_json.get("timeframe", parsed_json.get("tf", timeframe)))
+        sinyal    = parsed_json.get("signal", parsed_json.get("sinyal", sinyal))
+        price     = str(parsed_json.get("price", parsed_json.get("fiyat", price)))
+        print(f"[WEBHOOK] JSON sinyal: {symbol} {sinyal} @ {price}")
+        mesaj = format_mesaj(symbol, price, timeframe, sinyal)
+
+    # --- 2) PLAIN TEXT FORMAT (Pine Script alert() mesajı) ---
+    else:
+        if not raw:
+            return jsonify({"error": "Boş mesaj"}), 400
+
+        lines = [l.strip() for l in raw.split("\n") if l.strip()]
+        print(f"[WEBHOOK] Plain text satırlar: {lines}")
+
+        for line in lines:
+            # Sembol: büyük harf + USDT içeren satır
+            if line.isupper() and len(line) > 3 and any(c.isalpha() for c in line) and "USDT" in line:
+                symbol = line
+            # Fiyat: sadece rakam ve nokta
+            elif line.replace(".", "").replace(",", "").isdigit():
+                price = line
+            # Timeframe
+            elif any(x in line for x in ["DK", "SAAT", "GUN", "HAFTA"]):
+                tf_raw = line.upper()
+                if "1 DK" in tf_raw:     timeframe = "1"
+                elif "3 DK" in tf_raw:   timeframe = "3"
+                elif "5 DK" in tf_raw:   timeframe = "5"
+                elif "15 DK" in tf_raw:  timeframe = "15"
+                elif "30 DK" in tf_raw:  timeframe = "30"
+                elif "1 SAAT" in tf_raw: timeframe = "60"
+                elif "2 SAAT" in tf_raw: timeframe = "120"
+                elif "4 SAAT" in tf_raw: timeframe = "240"
+                elif "1 GUN" in tf_raw:  timeframe = "D"
+                elif "1 HAFTA" in tf_raw: timeframe = "W"
+            # Sinyal tipi
+            elif any(x in line.upper() for x in ["STRONG BUY", "STRONG SELL", "LONG", "SHORT", "BUY", "SELL"]):
+                sinyal = line
+
+        print(f"[WEBHOOK] Plain text parse: {symbol} {sinyal} @ {price} ({timeframe})")
+        mesaj = format_mesaj(symbol, price, timeframe, sinyal)
+
+    ok = send_telegram(mesaj, symbol, timeframe)
     return jsonify({"status": "ok" if ok else "error"}), 200 if ok else 500
 
 # ─── Sağlık kontrolü ──────────────────────────────────────────
