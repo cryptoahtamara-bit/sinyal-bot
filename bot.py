@@ -28,8 +28,8 @@ def get_screenshot(symbol: str, timeframe: str):
     tf = tf_map.get(str(timeframe), "1h")
 
     sym = symbol.upper().replace(".P", "").replace("USDT.P", "USDT")
-    if not any(x in sym for x in [":", "BINANCE", "BYBIT"]):
-        sym = f"BINANCE:{sym}"
+    if not any(x in sym for x in [":", "BINANCE", "BYBIT", "MEXC"]):
+        sym = f"MEXC:{sym}"
 
     url = "https://api.chart-img.com/v1/tradingview/advanced-chart"
     params = {
