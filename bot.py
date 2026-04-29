@@ -274,7 +274,7 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal, tp1, tp2, 
         )
         t.daemon = True
         t.start()
-        print(f"[TP] {symbol} için {TP_KONTROL_DK} dk sonra kontrol planlandı.")
+        print(f"[TP] {symbol} için {kontrol_dk} dk sonra kontrol planlandı.")
 
 def parse_plain(raw: str):
     symbol, timeframe, sinyal, price = "BTCUSDT", "60", "", "?"
