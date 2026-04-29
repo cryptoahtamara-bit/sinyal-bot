@@ -1,4 +1,4 @@
-import os, time, json, requests
+import os, time, json, re, requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 
@@ -11,6 +11,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
 KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
 KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
+
+# Son gönderilen sinyali takip et (duplicate önleme)
+son_sinyal = {"key": "", "zaman": 0}
 
 # ─── chart-img.com ile screenshot ─────────────────────────────
 def get_screenshot(symbol: str, timeframe: str):
@@ -50,10 +53,10 @@ def get_screenshot(symbol: str, timeframe: str):
 
 # ─── Sinyal emojisi ────────────────────────────────────────────
 def sinyal_emoji(sinyal: str) -> str:
-    s = sinyal.upper().replace(" ", "_").replace("-", "_")
-    if "STRONG_BUY" in s or "STRONG BUY" in s:
+    s = sinyal.upper()
+    if "STRONG" in s and ("BUY" in s or "LONG" in s):
         return "🔥 STRONG BUY"
-    if "STRONG_SELL" in s or "STRONG SELL" in s:
+    if "STRONG" in s and ("SELL" in s or "SHORT" in s):
         return "💀 STRONG SELL"
     if "LONG" in s or "BUY" in s:
         return "🚀 LONG"
@@ -92,7 +95,8 @@ def format_mesaj(symbol, price, timeframe, sinyal):
     tf_map = {
         "1": "1 DK", "3": "3 DK", "5": "5 DK", "15": "15 DK",
         "30": "30 DK", "60": "1 SAAT", "1H": "1 SAAT",
-        "120": "2 SAAT", "240": "4 SAAT", "D": "1 GÜN", "1D": "1 GÜN",
+        "120": "2 SAAT", "240": "4 SAAT",
+        "D": "1 GÜN", "1D": "1 GÜN",
         "W": "1 HAFTA", "1W": "1 HAFTA"
     }
     tf_goster = tf_map.get(str(timeframe), timeframe)
@@ -106,68 +110,84 @@ def format_mesaj(symbol, price, timeframe, sinyal):
         f"Sizde kulübe katılıp, alarmları kaçırmamak isterseniz lütfen iletişime geçin. {KANAL_TAG}"
     )
 
+# ─── Plain text parse ─────────────────────────────────────────
+def parse_plain(raw: str):
+    symbol    = "BTCUSDT"
+    timeframe = "60"
+    sinyal    = ""
+    price     = "?"
+
+    lines = [l.strip() for l in raw.split("\n") if l.strip()]
+
+    for line in lines:
+        u = line.upper()
+
+        # Sembol
+        if re.match(r'^[A-Z0-9]{3,12}$', line.replace(".P", "")) and any(
+            x in line.upper() for x in ["USDT","BTC","ETH","BNB","SOL","XRP","DOGE","ADA","DOT","AVAX"]
+        ):
+            symbol = line
+            continue
+
+        # Fiyat
+        if re.match(r'^\d+[\.,]?\d*$', line):
+            price = line
+            continue
+
+        # Timeframe
+        if "1 DK" in u:      timeframe = "1"
+        elif "3 DK" in u:    timeframe = "3"
+        elif "5 DK" in u:    timeframe = "5"
+        elif "15 DK" in u:   timeframe = "15"
+        elif "30 DK" in u:   timeframe = "30"
+        elif "1 SAAT" in u:  timeframe = "60"
+        elif "2 SAAT" in u:  timeframe = "120"
+        elif "4 SAAT" in u:  timeframe = "240"
+        elif "1 GUN" in u:   timeframe = "D"
+        elif "1 HAFTA" in u: timeframe = "W"
+
+        # Sinyal
+        if "STRONG BUY" in u or "STRONG_BUY" in u:
+            sinyal = "STRONG BUY"
+        elif "STRONG SELL" in u or "STRONG_SELL" in u:
+            sinyal = "STRONG SELL"
+        elif u == "LONG":
+            sinyal = "LONG"
+        elif u == "SHORT":
+            sinyal = "SHORT"
+
+    return symbol, price, timeframe, sinyal if sinyal else "SINYAL"
+
 # ─── Webhook ──────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
     raw = request.get_data(as_text=True).strip()
-    print(f"[WEBHOOK] Ham veri: {raw[:200]}")
 
-    symbol    = "BTCUSDT"
-    timeframe = "60"
-    sinyal    = "SINYAL"
-    price     = "?"
+    if not raw:
+        return jsonify({"error": "Boş mesaj"}), 400
 
-    # --- 1) JSON FORMAT dene ---
-    parsed_json = None
+    # JSON dene
     try:
-        parsed_json = json.loads(raw)
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            symbol    = data.get("symbol", data.get("ticker", "BTCUSDT"))
+            timeframe = str(data.get("timeframe", data.get("tf", "60")))
+            sinyal    = data.get("signal", data.get("sinyal", "SINYAL"))
+            price     = str(data.get("price", data.get("fiyat", "?")))
     except Exception:
-        # Content-Type json ama body düz metin olabilir
-        pass
+        symbol, price, timeframe, sinyal = parse_plain(raw)
 
-    if parsed_json and isinstance(parsed_json, dict):
-        symbol    = parsed_json.get("symbol", parsed_json.get("ticker", symbol))
-        timeframe = str(parsed_json.get("timeframe", parsed_json.get("tf", timeframe)))
-        sinyal    = parsed_json.get("signal", parsed_json.get("sinyal", sinyal))
-        price     = str(parsed_json.get("price", parsed_json.get("fiyat", price)))
-        print(f"[WEBHOOK] JSON sinyal: {symbol} {sinyal} @ {price}")
-        mesaj = format_mesaj(symbol, price, timeframe, sinyal)
+    # Duplicate önleme — aynı sembol+sinyal 10 saniye içinde tekrar gelirse atla
+    simdi = time.time()
+    anahtar = f"{symbol}_{sinyal}_{timeframe}"
+    if anahtar == son_sinyal["key"] and simdi - son_sinyal["zaman"] < 10:
+        print(f"[DUPLICATE] {anahtar} atlandı.")
+        return jsonify({"status": "duplicate"}), 200
+    son_sinyal["key"] = anahtar
+    son_sinyal["zaman"] = simdi
 
-    # --- 2) PLAIN TEXT FORMAT (Pine Script alert() mesajı) ---
-    else:
-        if not raw:
-            return jsonify({"error": "Boş mesaj"}), 400
-
-        lines = [l.strip() for l in raw.split("\n") if l.strip()]
-        print(f"[WEBHOOK] Plain text satırlar: {lines}")
-
-        for line in lines:
-            # Sembol: büyük harf + USDT içeren satır
-            if line.isupper() and len(line) > 3 and any(c.isalpha() for c in line) and "USDT" in line:
-                symbol = line
-            # Fiyat: sadece rakam ve nokta
-            elif line.replace(".", "").replace(",", "").isdigit():
-                price = line
-            # Timeframe
-            elif any(x in line for x in ["DK", "SAAT", "GUN", "HAFTA"]):
-                tf_raw = line.upper()
-                if "1 DK" in tf_raw:     timeframe = "1"
-                elif "3 DK" in tf_raw:   timeframe = "3"
-                elif "5 DK" in tf_raw:   timeframe = "5"
-                elif "15 DK" in tf_raw:  timeframe = "15"
-                elif "30 DK" in tf_raw:  timeframe = "30"
-                elif "1 SAAT" in tf_raw: timeframe = "60"
-                elif "2 SAAT" in tf_raw: timeframe = "120"
-                elif "4 SAAT" in tf_raw: timeframe = "240"
-                elif "1 GUN" in tf_raw:  timeframe = "D"
-                elif "1 HAFTA" in tf_raw: timeframe = "W"
-            # Sinyal tipi
-            elif any(x in line.upper() for x in ["STRONG BUY", "STRONG SELL", "LONG", "SHORT", "BUY", "SELL"]):
-                sinyal = line
-
-        print(f"[WEBHOOK] Plain text parse: {symbol} {sinyal} @ {price} ({timeframe})")
-        mesaj = format_mesaj(symbol, price, timeframe, sinyal)
-
+    print(f"[SINYAL] {symbol} {sinyal} @ {price} ({timeframe})")
+    mesaj = format_mesaj(symbol, price, timeframe, sinyal)
     ok = send_telegram(mesaj, symbol, timeframe)
     return jsonify({"status": "ok" if ok else "error"}), 200 if ok else 500
 
