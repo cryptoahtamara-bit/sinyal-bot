@@ -11,6 +11,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
 KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
 KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
+TP_KONTROL_DK    = int(os.getenv("TP_KONTROL_DK", "15"))
 
 son_sinyal = {"key": "", "zaman": 0}
 
@@ -40,15 +41,12 @@ def get_screenshot_chartimg(symbol: str, timeframe: str):
         return None
 
 def get_screenshot_tv(imageurl: str):
-    """TradingView {{imageurl}} — indikatörlü grafik"""
     try:
         r = requests.get(imageurl, timeout=15)
         if r.status_code == 200:
             return r.content
-        print(f"[TV_IMG] Hata: {r.status_code}")
         return None
-    except Exception as e:
-        print(f"[TV_IMG] Timeout: {e}")
+    except:
         return None
 
 def sinyal_emoji(sinyal: str) -> str:
@@ -79,20 +77,172 @@ def format_mesaj(symbol, price, timeframe, sinyal, tp1=None, tp2=None, tp3=None)
         + f"\nSiz de kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin. \nİletişim: {KANAL_TAG}"
     )
 
-def send_telegram(caption: str, symbol: str, timeframe: str, imageurl: str = None):
-    base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+def get_sym(symbol: str) -> str:
+    return symbol.upper().replace(".P", "").replace("USDT.P", "USDT")
 
-    # Önce TradingView'in kendi görselini dene (indikatörlü)
+def get_mexc_price(symbol: str) -> float:
+    """MEXC API'den güncel fiyat çek"""
+    sym = get_sym(symbol)
+    if not sym.endswith("USDT"):
+        sym = sym + "USDT"
+    try:
+        url = f"https://api.mexc.com/api/v3/ticker/price?symbol={sym}"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            return float(r.json()["price"])
+    except:
+        pass
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={sym}"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            return float(r.json()["price"])
+    except:
+        pass
+    return None
+
+def get_high_low_in_period(symbol: str, start_ts: int, end_ts: int):
+    """Belirli zaman aralığındaki en yüksek ve en düşük fiyatı çek (1m mumlar)"""
+    sym = get_sym(symbol)
+    if not sym.endswith("USDT"):
+        sym = sym + "USDT"
+    
+    en_yuksek = None
+    en_dusuk = None
+    
+    # MEXC kline API
+    try:
+        url = "https://api.mexc.com/api/v3/klines"
+        params = {
+            "symbol": sym,
+            "interval": "1m",
+            "startTime": start_ts * 1000,
+            "endTime": end_ts * 1000,
+            "limit": 20
+        }
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            klines = r.json()
+            if klines:
+                highs = [float(k[2]) for k in klines]
+                lows  = [float(k[3]) for k in klines]
+                en_yuksek = max(highs)
+                en_dusuk  = min(lows)
+                print(f"[TP] MEXC kline OK: high={en_yuksek} low={en_dusuk}")
+                return en_yuksek, en_dusuk
+    except Exception as e:
+        print(f"[TP] MEXC kline hata: {e}")
+    
+    # Binance kline API
+    try:
+        url = "https://api.binance.com/api/v3/klines"
+        params = {
+            "symbol": sym,
+            "interval": "1m",
+            "startTime": start_ts * 1000,
+            "endTime": end_ts * 1000,
+            "limit": 20
+        }
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            klines = r.json()
+            if klines:
+                highs = [float(k[2]) for k in klines]
+                lows  = [float(k[3]) for k in klines]
+                en_yuksek = max(highs)
+                en_dusuk  = min(lows)
+                print(f"[TP] Binance kline OK: high={en_yuksek} low={en_dusuk}")
+                return en_yuksek, en_dusuk
+    except Exception as e:
+        print(f"[TP] Binance kline hata: {e}")
+    
+    return None, None
+
+def tp_kontrol_gonder(symbol, sinyal, tp1, tp2, tp3, message_id, dakika, sinyal_ts):
+    """dakika sonra TP kontrolü yap — periyot içi high/low ile karşılaştır"""
+    time.sleep(dakika * 60)
+
+    end_ts = int(time.time())
+    en_yuksek, en_dusuk = get_high_low_in_period(symbol, sinyal_ts, end_ts)
+
+    if en_yuksek is None and en_dusuk is None:
+        print(f"[TP] {symbol} kline verisi alınamadı, anlık fiyata düşülüyor")
+        guncel = get_mexc_price(symbol)
+        en_yuksek = guncel
+        en_dusuk = guncel
+
+    is_long  = any(x in sinyal.upper() for x in ["BUY", "LONG"])
+    is_short = any(x in sinyal.upper() for x in ["SELL", "SHORT"])
+
+    def tp_ulasti(tp_fiyat):
+        if tp_fiyat is None:
+            return False
+        try:
+            tp = float(tp_fiyat)
+            if is_long  and en_yuksek is not None: return en_yuksek >= tp
+            if is_short and en_dusuk  is not None: return en_dusuk  <= tp
+        except:
+            pass
+        return False
+
+    tp1_ok = tp_ulasti(tp1)
+    tp2_ok = tp_ulasti(tp2)
+    tp3_ok = tp_ulasti(tp3)
+
+    # Referans fiyat gösterimi
+    if is_long and en_yuksek:
+        ref = en_yuksek
+        ref_label = "En Yüksek"
+    elif is_short and en_dusuk:
+        ref = en_dusuk
+        ref_label = "En Düşük"
+    else:
+        ref = get_mexc_price(symbol) or 0
+        ref_label = "Güncel"
+
+    fiyat_str = f"{ref:.4f}" if ref < 10 else f"{ref:.2f}"
+
+    mesaj = (
+        f"📊 <b>TP Kontrol — {dakika} DK</b>\n\n"
+        f"⚡ {symbol}\n"
+        f"💹 {ref_label}: <b>{fiyat_str}</b>\n\n"
+    )
+    if tp1:
+        mesaj += f"🎯 TP1: {tp1} — {chr(9989)+' ULAŞILDI' if tp1_ok else chr(10060)+' Ulaşılmadı'}\n"
+    if tp2:
+        mesaj += f"🎯 TP2: {tp2} — {chr(9989)+' ULAŞILDI' if tp2_ok else chr(10060)+' Ulaşılmadı'}\n"
+    if tp3:
+        mesaj += f"🎯 TP3: {tp3} — {chr(9989)+' ULAŞILDI' if tp3_ok else chr(10060)+' Ulaşılmadı'}\n"
+
+    base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+    try:
+        resp = requests.post(
+            f"{base}/sendMessage",
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": mesaj,
+                "parse_mode": "HTML",
+                "reply_to_message_id": message_id
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            print(f"[TP] {symbol} TP kontrol gönderildi.")
+        else:
+            print(f"[TP] Hata: {resp.status_code} — {resp.text}")
+    except Exception as e:
+        print(f"[TP] Gönderim hatası: {e}")
+
+def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal, tp1, tp2, tp3, imageurl=None):
+    base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
     img_data = None
     if imageurl:
-        print(f"[IMG] TradingView görüntüsü alınıyor...")
         img_data = get_screenshot_tv(imageurl)
-
-    # TradingView görseli yoksa chart-img'e düş
     if not img_data:
         print(f"[IMG] chart-img'e düşüldü...")
         img_data = get_screenshot_chartimg(symbol, timeframe)
 
+    message_id = None
     try:
         if img_data:
             resp = requests.post(
@@ -108,11 +258,24 @@ def send_telegram(caption: str, symbol: str, timeframe: str, imageurl: str = Non
                 timeout=15,
             )
         if resp.status_code == 200:
-            print(f"[OK] {symbol} gönderildi.")
+            message_id = resp.json().get("result", {}).get("message_id")
+            print(f"[OK] {symbol} gönderildi. message_id={message_id}")
         else:
             print(f"[HATA] {resp.status_code} — {resp.text}")
     except Exception as e:
         print(f"[HATA] send_telegram: {e}")
+        return
+
+    # TP'ler varsa 15 dk sonra kontrol et
+    if message_id and any([tp1, tp2, tp3]):
+        sinyal_ts = int(time.time())
+        t = threading.Thread(
+            target=tp_kontrol_gonder,
+            args=(symbol, sinyal, tp1, tp2, tp3, message_id, TP_KONTROL_DK, sinyal_ts)
+        )
+        t.daemon = True
+        t.start()
+        print(f"[TP] {symbol} için {TP_KONTROL_DK} dk sonra kontrol planlandı.")
 
 def parse_plain(raw: str):
     symbol, timeframe, sinyal, price = "BTCUSDT", "60", "", "?"
@@ -157,6 +320,7 @@ def webhook():
         return jsonify({"error": "Boş mesaj"}), 400
 
     imageurl = None
+    tp1 = tp2 = tp3 = None
     try:
         data = json.loads(raw)
         if isinstance(data, dict):
@@ -172,6 +336,7 @@ def webhook():
             raise ValueError
     except Exception:
         symbol, price, timeframe, sinyal, tp1, tp2, tp3 = parse_plain(raw)
+        imageurl = None
 
     # Duplicate önleme
     simdi = time.time()
@@ -182,10 +347,13 @@ def webhook():
     son_sinyal["key"] = anahtar
     son_sinyal["zaman"] = simdi
 
-    print(f"[SINYAL] {symbol} {sinyal} @ {price} ({timeframe}) imageurl={imageurl}")
+    print(f"[SINYAL] {symbol} {sinyal} @ {price} ({timeframe})")
     mesaj = format_mesaj(symbol, price, timeframe, sinyal, tp1, tp2, tp3)
 
-    t = threading.Thread(target=send_telegram, args=(mesaj, symbol, timeframe, imageurl))
+    t = threading.Thread(
+        target=send_telegram_and_schedule_tp,
+        args=(mesaj, symbol, timeframe, sinyal, tp1, tp2, tp3, imageurl)
+    )
     t.daemon = True
     t.start()
 
