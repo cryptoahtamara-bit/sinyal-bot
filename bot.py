@@ -3,7 +3,7 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 
 load_dotenv()
-  
+
 app = Flask(__name__)
 
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
