@@ -20,16 +20,15 @@ KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
 def tp_sure(timeframe: str) -> int:
     """Timeframe'e göre TP kontrol süresi (dakika)"""
     tf = str(timeframe)
-    if tf in ["1", "3"]:       return 15
-    if tf in ["5"]:            return 30
-    if tf in ["15"]:           return 60
-    if tf in ["30"]:           return 120
-    if tf in ["60", "1H"]:     return 240
-    if tf in ["120"]:          return 480
-    if tf in ["240"]:          return 1440
-    if tf in ["D", "1D"]:      return 4320
-    if tf in ["W", "1W"]:      return 10080
-    return 15
+    if tf in ["1", "3"]:        return 30       # 30 dk
+    if tf in ["5"]:             return 60        # 1 saat
+    if tf in ["15"]:            return 240       # 4 saat
+    if tf in ["30"]:            return 1440      # 1 gün
+    if tf in ["60", "1H"]:      return 10080     # 1 hafta
+    if tf in ["240", "4H"]:     return 20160     # 2 hafta
+    if tf in ["D", "1D"]:       return 43200     # 1 ay (30 gün)
+    if tf in ["W", "1W"]:       return 172800    # 4 ay (120 gün)
+    return 30
 
 son_sinyal = {"key": "", "zaman": 0}
 
