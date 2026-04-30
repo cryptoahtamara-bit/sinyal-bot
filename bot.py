@@ -220,6 +220,16 @@ def sinyal_emoji(sinyal: str) -> str:
     if "SHORT" in s or "SELL" in s:                      return "📉 SHORT"
     return sinyal
 
+def fmt_tp(val):
+    """TP değerini 4 hane formatında döndür"""
+    if val is None:
+        return None
+    try:
+        f = float(str(val).replace(",", "."))
+        return f"{f:.4f}"
+    except:
+        return str(val)
+
 def format_mesaj(symbol, price, timeframe, sinyal, tp1=None, tp2=None, tp3=None):
     tf_map = {
         "1": "1 DK", "3": "3 DK", "5": "5 DK", "15": "15 DK",
@@ -228,6 +238,9 @@ def format_mesaj(symbol, price, timeframe, sinyal, tp1=None, tp2=None, tp3=None)
         "D": "1 GÜN", "1D": "1 GÜN", "W": "1 HAFTA"
     }
     tf_goster = tf_map.get(str(timeframe), timeframe)
+    tp1 = fmt_tp(tp1)
+    tp2 = fmt_tp(tp2)
+    tp3 = fmt_tp(tp3)
     return (
         f"❗ {KANAL_ADI} ❗\n\n"
         f"⚡ {symbol}\n"
