@@ -609,17 +609,16 @@ def webhook():
             msg     = data["message"]
             text    = msg.get("text", "").strip().lower()
             chat_id = str(msg.get("chat", {}).get("id", ""))
-if text.startswith("/istatistik"):
-    yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
-    if chat_id in yetkili:
-        _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
-        print(f"[KOMUT] /istatistik islendi. chat_id={chat_id}")
-
-if text.startswith("/rapor"):
-    yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
-    if chat_id in yetkili:
-        _ozet_gonder()
-        print(f"[KOMUT] /rapor islendi. chat_id={chat_id}")
+            if text.startswith("/istatistik"):
+                yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
+                if chat_id in yetkili:
+                    _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
+                    print(f"[KOMUT] /istatistik islendi. chat_id={chat_id}")
+            if text.startswith("/rapor"):
+                yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
+                if chat_id in yetkili:
+                    _ozet_gonder()
+                    print(f"[KOMUT] /rapor islendi. chat_id={chat_id}")
             return jsonify({"status": "ok"}), 200
     except:
         pass
