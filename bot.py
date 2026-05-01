@@ -1,15 +1,19 @@
-import os, time, json, re, threading, requests
+import os, time, json, re, threading, requests, io
 from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from PIL import Image, ImageDraw, ImageFont
-import io
 
 try:
     import pytz
     TR_TZ = pytz.timezone("Europe/Istanbul")
 except:
     TR_TZ = None
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except:
+    PIL_AVAILABLE = False
 
 load_dotenv()
 
@@ -21,6 +25,7 @@ TELEGRAM_LOG_ID  = os.getenv("TELEGRAM_LOG_ID", "")
 CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
 KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
 KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
+VERI_DOSYASI     = os.getenv("VERI_DOSYASI", "/data/sinyaller.json")
 
 # ==========================================
 # YARDIMCI FONKSİYONLAR
@@ -50,12 +55,9 @@ def fmt_fiyat(val):
         return None
     try:
         f = float(str(val).replace(",", "."))
-        if f >= 50:
-            return f"{f:.2f}"
-        elif f >= 1:
-            return f"{f:.4f}"
-        else:
-            return f"{f:.6f}"
+        if f >= 50:    return f"{f:.2f}"
+        elif f >= 1:   return f"{f:.4f}"
+        else:          return f"{f:.6f}"
     except:
         return str(val)
 
@@ -80,6 +82,35 @@ son_sinyal       = {"key": "", "zaman": 0}
 gunluk_sinyaller = []
 gunluk_kilit     = threading.Lock()
 LOG_MAGIC        = "#SINYAL_LOG#"
+dosya_kilit      = threading.Lock()
+
+
+def dosyaya_kaydet():
+    try:
+        os.makedirs(os.path.dirname(VERI_DOSYASI), exist_ok=True)
+        with dosya_kilit:
+            with open(VERI_DOSYASI, "w", encoding="utf-8") as f:
+                json.dump(gunluk_sinyaller, f, ensure_ascii=False, indent=2)
+        print(f"[DOSYA] {len(gunluk_sinyaller)} sinyal kaydedildi.")
+    except Exception as e:
+        print(f"[DOSYA] Yazma hatasi: {e}")
+
+
+def dosyadan_yukle():
+    global gunluk_sinyaller
+    try:
+        if not os.path.exists(VERI_DOSYASI):
+            print("[DOSYA] Veri dosyasi bulunamadi, temiz baslaniyor.")
+            return
+        with open(VERI_DOSYASI, "r", encoding="utf-8") as f:
+            veriler = json.load(f)
+        sinir = time.time() - 30 * 86400
+        veriler = [s for s in veriler if s.get("zaman", 0) > sinir]
+        with gunluk_kilit:
+            gunluk_sinyaller = veriler
+        print(f"[DOSYA] {len(veriler)} sinyal yuklendi.")
+    except Exception as e:
+        print(f"[DOSYA] Okuma hatasi: {e}")
 
 
 def sinyal_kaydet(symbol, sinyal, timeframe, price, tp1, tp2, tp3, sl, message_id):
@@ -94,28 +125,11 @@ def sinyal_kaydet(symbol, sinyal, timeframe, price, tp1, tp2, tp3, sl, message_i
     }
     with gunluk_kilit:
         gunluk_sinyaller.append(kayit)
+    dosyaya_kaydet()
     if TELEGRAM_LOG_ID:
         log_satir = LOG_MAGIC + json.dumps(kayit, ensure_ascii=False)
         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, log_satir)
 
-def sinyal_kaydet(symbol, sinyal, timeframe, price, tp1, tp2, tp3, sl, message_id):
-    kayit = {
-        "gun": gun_str(), "zaman": time.time(),
-        "symbol": symbol, "sinyal": sinyal,
-        "timeframe": timeframe, "price": price,
-        "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl,
-        "tp1_ok": None, "tp2_ok": None, "tp3_ok": None,
-        "sl_ok": None,
-        "message_id": message_id
-    }
-    with gunluk_kilit:
-        gunluk_sinyaller.append(kayit)
-
-    dosyaya_kaydet()  # ← BU SATIRI EKLEYİN
-
-    if TELEGRAM_LOG_ID:
-        log_satir = LOG_MAGIC + json.dumps(kayit, ensure_ascii=False)
-        _telegram_mesaj_gonder(TELEGRAM_LOG_ID, log_satir)
 
 def tp_sonuc_guncelle(message_id, tp1_ok, tp2_ok, tp3_ok, sl_ok):
     with gunluk_kilit:
@@ -126,6 +140,7 @@ def tp_sonuc_guncelle(message_id, tp1_ok, tp2_ok, tp3_ok, sl_ok):
                 s["tp3_ok"] = tp3_ok
                 s["sl_ok"]  = sl_ok
                 break
+    dosyaya_kaydet()
 
 
 # ==========================================
@@ -141,7 +156,7 @@ def _telegram_mesaj_gonder(chat_id, metin, reply_to=None, parse_mode="HTML"):
         r = requests.post(f"{base}/sendMessage", json=payload, timeout=15)
         return r
     except Exception as e:
-        print(f"[TELEGRAM] Mesaj gonderme hatasi: {e}")
+        print(f"[TELEGRAM] Mesaj hatasi: {e}")
         return None
 
 
@@ -153,7 +168,7 @@ def _telegram_foto_gonder(chat_id, img_data, caption, parse_mode="HTML"):
             files={"photo": ("chart.png", img_data, "image/png")}, timeout=30)
         return r
     except Exception as e:
-        print(f"[TELEGRAM] Foto gonderme hatasi: {e}")
+        print(f"[TELEGRAM] Foto hatasi: {e}")
         return None
 
 
@@ -180,7 +195,7 @@ def get_screenshot_chartimg(symbol: str, timeframe: str):
         r = requests.get(url, params=params, headers=headers, timeout=10)
         if r.status_code == 200:
             return r.content
-        print(f"[SCREENSHOT] chart-img hata: {r.status_code}")
+        print(f"[SCREENSHOT] Hata: {r.status_code}")
     except Exception as e:
         print(f"[SCREENSHOT] Timeout: {e}")
     return None
@@ -266,7 +281,7 @@ def get_high_low_in_period(symbol: str, start_ts: int, end_ts: int):
                 if klines:
                     return max(float(k[2]) for k in klines), min(float(k[3]) for k in klines)
         except Exception as e:
-            print(f"[TP] kline hata ({api_url}): {e}")
+            print(f"[TP] kline hata: {e}")
     return None, None
 
 
@@ -319,7 +334,6 @@ def tp_kontrol_gonder(symbol, sinyal, tp1, tp2, tp3, sl, message_id, dakika, sin
         if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
             _telegram_mesaj_gonder(TELEGRAM_LOG_ID, msg)
 
-    # Her dakika kontrol et, TP veya SL tetiklenirse hemen bildir
     kontrol_araligi           = 60
     toplam_sure               = dakika * 60
     gecen_sure                = 0
@@ -343,7 +357,6 @@ def tp_kontrol_gonder(symbol, sinyal, tp1, tp2, tp3, sl, message_id, dakika, sin
             msg = mesaj_olustur(tp1_ok, tp2_ok, tp3_ok, sl_ok, erken=True)
             bildirim_gonder(msg)
             erken_bildirim_gonderildi = True
-
             if sl_ok:
                 sl_mesaj = (
                     f"⛔ <b>SL TETİKLENDİ</b>\n\n"
@@ -351,7 +364,6 @@ def tp_kontrol_gonder(symbol, sinyal, tp1, tp2, tp3, sl, message_id, dakika, sin
                     f"🚪 SL Seviyesi: {fmt_fiyat(sl)}"
                 )
                 bildirim_gonder(sl_mesaj)
-
             tp_sonuc_guncelle(message_id, tp1_ok, tp2_ok, tp3_ok, sl_ok)
             return
 
@@ -441,7 +453,7 @@ def istatistik_hesapla(gun_filtre=None):
         kontrol_yapildi = any(s[k] is not None for k in ["tp1_ok", "tp2_ok", "tp3_ok"])
         if kontrol_yapildi:
             tp_kontrol_yapilan += 1
-            if s.get("tp1_ok") is True:
+            if s.get("tp1_ok") is True:  # Sadece TP1 tutarsa başarılı
                 tp_basarili += 1
             if s.get("sl_ok") is True:
                 sl_tetiklenen += 1
@@ -472,7 +484,12 @@ def istatistik_mesaji():
         f"🏆 Başarı Oranı: <b>%{t['basari_oran']}</b>"
     )
     return mesaj
-    
+
+
+# ==========================================
+# RAPOR GÖRSELİ
+# ==========================================
+
 def raporozet_gorsel_olustur():
     bugun = gun_str()
     b = istatistik_hesapla(gun_filtre=bugun)
@@ -488,30 +505,30 @@ def raporozet_gorsel_olustur():
         kontrol = any(s[k] is not None for k in ["tp1_ok", "tp2_ok", "tp3_ok"])
         if kontrol:
             pariteler[sym]["kontrol"] += 1
-            if any(s[k] is True for k in ["tp1_ok", "tp2_ok", "tp3_ok"]):
+            if s.get("tp1_ok") is True:
                 pariteler[sym]["tp"] += 1
             if s.get("sl_ok") is True:
                 pariteler[sym]["sl"] += 1
 
-    satirlar = []
+    tablo_satirlar = []
     for sym, v in sorted(pariteler.items(), key=lambda x: -x[1]["toplam"]):
         oran = round(v["tp"] / v["kontrol"] * 100, 1) if v["kontrol"] > 0 else 0
-        satirlar.append(f"{i+1:>2}. {saat} | {sym[:6]:<6} | {s['sinyal'][:8]:<8} | {tp_durum}")
+        tablo_satirlar.append((sym, v["toplam"], v["tp"], v["sl"], oran))
 
-    satir_yuksekligi = 44
-    ust_bolum = 210
-    tablo_yuksekligi = max(len(satirlar), 1) * satir_yuksekligi + 50
-    genislik = 500
-    yukseklik = ust_bolum + tablo_yuksekligi + 20
+    satir_yuksekligi = 36
+    ust_bolum        = 210
+    tablo_yuksekligi = max(len(tablo_satirlar), 1) * satir_yuksekligi + 50
+    genislik         = 600
+    yukseklik        = ust_bolum + tablo_yuksekligi + 20
 
-    img = Image.new("RGB", (genislik, yukseklik), color=(15, 20, 40))
+    img  = Image.new("RGB", (genislik, yukseklik), color=(15, 20, 40))
     draw = ImageDraw.Draw(img)
 
     try:
-        font_baslik = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 50)
-        font_buyuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 50)
-        font_normal = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 50)
-        font_kucuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 50)
+        font_baslik = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+        font_buyuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
+        font_normal = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+        font_kucuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
     except:
         font_baslik = ImageFont.load_default()
         font_buyuk  = ImageFont.load_default()
@@ -520,51 +537,54 @@ def raporozet_gorsel_olustur():
 
     # Başlık
     draw.rectangle([0, 0, genislik, 55], fill=(30, 50, 90))
-    draw.text((20, 10), "BEN KUL YUTMAM", font=font_baslik, fill=(255, 200, 50))
-    draw.text((20, 32), f"ISLEM RAPORU  |  {bugun}", font=font_kucuk, fill=(160, 190, 230))
+    draw.text((20, 8),  "BEN KUL YUTMAM — ISLEM RAPORU", font=font_baslik, fill=(255, 200, 50))
+    draw.text((20, 34), f"{bugun}", font=font_kucuk, fill=(160, 190, 230))
 
     # Özet kartlar
     kart_renk = (25, 40, 75)
-    draw.rectangle([15, 70, 190, 150], fill=kart_renk, outline=(50, 80, 140), width=1)
-    draw.text((25, 77), "Toplam Sinyal", font=font_kucuk, fill=(150, 180, 220))
-    draw.text((25, 97), str(b["toplam"]), font=font_buyuk, fill=(255, 255, 255))
-    draw.text((25, 128), f"Long {b['long']}  Short {b['short']}", font=font_kucuk, fill=(120, 160, 200))
+    draw.rectangle([15, 70, 190, 155], fill=kart_renk, outline=(50, 80, 140), width=1)
+    draw.text((25, 77),  "Toplam Sinyal", font=font_kucuk, fill=(150, 180, 220))
+    draw.text((25, 100), str(b["toplam"]), font=font_buyuk, fill=(255, 255, 255))
+    draw.text((25, 132), f"L:{b['long']}  S:{b['short']}", font=font_kucuk, fill=(120, 160, 200))
 
-    draw.rectangle([205, 70, 395, 150], fill=kart_renk, outline=(50, 80, 140), width=1)
-    draw.text((215, 77), "TP Basari", font=font_kucuk, fill=(150, 180, 220))
-    draw.text((215, 97), f"{b['tp_basarili']} / {b['tp_kontrol']}", font=font_buyuk, fill=(80, 220, 140))
-    draw.text((215, 128), f"SL Tetiklenen: {b['sl_tetiklenen']}", font=font_kucuk, fill=(220, 100, 100))
+    draw.rectangle([205, 70, 395, 155], fill=kart_renk, outline=(50, 80, 140), width=1)
+    draw.text((215, 77),  "TP Basari", font=font_kucuk, fill=(150, 180, 220))
+    draw.text((215, 100), f"{b['tp_basarili']}/{b['tp_kontrol']}", font=font_buyuk, fill=(80, 220, 140))
+    draw.text((215, 132), f"SL: {b['sl_tetiklenen']}", font=font_kucuk, fill=(220, 100, 100))
 
-    draw.rectangle([410, 70, 585, 150], fill=kart_renk, outline=(50, 80, 140), width=1)
-    draw.text((420, 77), "Basari Orani", font=font_kucuk, fill=(150, 180, 220))
+    draw.rectangle([410, 70, 585, 155], fill=kart_renk, outline=(50, 80, 140), width=1)
+    draw.text((420, 77),  "Basari Orani", font=font_kucuk, fill=(150, 180, 220))
     oran_renk = (80, 220, 140) if b["basari_oran"] >= 50 else (224, 180, 80) if b["basari_oran"] >= 30 else (220, 100, 100)
-    draw.text((420, 97), f"%{b['basari_oran']}", font=font_buyuk, fill=oran_renk)
+    draw.text((420, 100), f"%{b['basari_oran']}", font=font_buyuk, fill=oran_renk)
 
     # Tablo başlığı
     tablo_y = ust_bolum
     draw.rectangle([0, tablo_y, genislik, tablo_y + 38], fill=(30, 50, 90))
-    draw.text((20,  tablo_y + 10), "Parite", font=font_kucuk, fill=(180, 210, 255))
-    draw.text((160, tablo_y + 10), "Toplam", font=font_kucuk, fill=(180, 210, 255))
-    draw.text((270, tablo_y + 10), "TP", font=font_kucuk, fill=(180, 210, 255))
-    draw.text((350, tablo_y + 10), "SL", font=font_kucuk, fill=(180, 210, 255))
-    draw.text((440, tablo_y + 10), "Basari", font=font_kucuk, fill=(180, 210, 255))
+    draw.text((15,  tablo_y + 9), "#",      font=font_kucuk, fill=(180, 210, 255))
+    draw.text((45,  tablo_y + 9), "Parite", font=font_kucuk, fill=(180, 210, 255))
+    draw.text((160, tablo_y + 9), "Toplam", font=font_kucuk, fill=(180, 210, 255))
+    draw.text((265, tablo_y + 9), "TP",     font=font_kucuk, fill=(180, 210, 255))
+    draw.text((345, tablo_y + 9), "SL",     font=font_kucuk, fill=(180, 210, 255))
+    draw.text((430, tablo_y + 9), "Basari", font=font_kucuk, fill=(180, 210, 255))
 
-    for idx, (sym, top, tp, sl, oran) in enumerate(satirlar):
-        y = tablo_y + 38 + idx * satir_yuksekligi
-        satir_renk = (20, 32, 60) if idx % 2 == 0 else (25, 40, 75)
+    # Tablo satırları
+    for idx, (sym, top, tp, sl, oran) in enumerate(tablo_satirlar):
+        y           = tablo_y + 38 + idx * satir_yuksekligi
+        satir_renk  = (20, 32, 60) if idx % 2 == 0 else (25, 40, 75)
         draw.rectangle([0, y, genislik, y + satir_yuksekligi], fill=satir_renk)
-        draw.text((20,  y + 9), str(idx+1), font=font_normal, fill=(150, 170, 210))
-        draw.text((55,  y + 9), sym,        font=font_normal, fill=(255, 255, 255))
-        draw.text((170, y + 9), str(top),   font=font_normal, fill=(200, 220, 255))
-        draw.text((270, y + 9), str(tp),    font=font_normal, fill=(80, 220, 140))
-        draw.text((350, y + 9), str(sl),    font=font_normal, fill=(220, 100, 100))
+        draw.text((15,  y + 7), str(idx + 1), font=font_normal, fill=(150, 170, 210))
+        draw.text((45,  y + 7), sym,           font=font_normal, fill=(255, 255, 255))
+        draw.text((160, y + 7), str(top),      font=font_normal, fill=(200, 220, 255))
+        draw.text((265, y + 7), str(tp),       font=font_normal, fill=(80, 220, 140))
+        draw.text((345, y + 7), str(sl),       font=font_normal, fill=(220, 100, 100))
         oran_renk2 = (80, 220, 140) if oran >= 50 else (224, 180, 80) if oran >= 30 else (220, 100, 100)
-        draw.text((440, y + 9), f"%{oran}", font=font_normal, fill=oran_renk2)
+        draw.text((430, y + 7), f"%{oran}",    font=font_normal, fill=oran_renk2)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=92)
     buf.seek(0)
     return buf.getvalue()
+
 
 # ==========================================
 # GÜNLÜK ÖZET
@@ -608,7 +628,7 @@ def _ozet_gonder():
 
     b        = istatistik_hesapla(gun_filtre=bugun)
     satirlar = []
-    for i, s in enumerate(bugun_sinyaller):
+    for idx, s in enumerate(bugun_sinyaller):
         if TR_TZ:
             dt = datetime.fromtimestamp(s["zaman"], tz=TR_TZ)
         else:
@@ -623,7 +643,7 @@ def _ozet_gonder():
             tp_durum = f"{tp_g}/{tp_t}TP {sl_d}".strip()
         else:
             tp_durum = "bekl."
-        satirlar.append(f"{i+1:>2}. {saat} | {sym[:6]:<6} | {s['sinyal'][:8]:<8} | {tp_durum}")
+        satirlar.append(f"{idx+1:>2}. {saat} | {sym[:6]:<6} | {s['sinyal'][:8]:<8} | {tp_durum}")
 
     mesaj = (
         f"<b>Gunluk Ozet — {bugun}</b>\n\n"
@@ -631,17 +651,18 @@ def _ozet_gonder():
         f"✅ TP: <b>{b['tp_basarili']}</b>/{b['tp_kontrol']}  "
         f"⛔ SL: <b>{b['sl_tetiklenen']}</b>\n"
         f"🏆 Basari: <b>%{b['basari_oran']}</b>\n\n"
-        f"<code>Saat  | Sembol | Sinyal   | Sonuc\n"
-        + "-" * 38 + "\n"
+        f"<code> #   Saat  | Sembol | Sinyal   | Sonuc\n"
+        + "-" * 42 + "\n"
         + "\n".join(satirlar)
         + "</code>"
     )
     _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
     print(f"[OZET] Gonderildi. {b['toplam']} sinyal.")
 
-    sinir = time.time() - 3 * 86400
+    sinir = time.time() - 30 * 86400
     with gunluk_kilit:
         gunluk_sinyaller[:] = [s for s in gunluk_sinyaller if s["zaman"] > sinir]
+    dosyaya_kaydet()
 
 
 # ==========================================
@@ -681,7 +702,7 @@ def parse_plain(raw: str):
         elif line.startswith("TP3 "): tp3 = line[4:].strip()
         elif line.lower().startswith("cikis:"):
             sl = line.split(":", 1)[1].strip()
-        elif line.lower().startswith("Giris (Entry):"):
+        elif line.lower().startswith("giris:"):
             price = line.split(":", 1)[1].strip()
     return symbol, price, timeframe, sinyal if sinyal else "SINYAL", tp1, tp2, tp3, sl
 
@@ -703,28 +724,35 @@ def webhook():
             msg     = data.get("message") or data.get("channel_post")
             text    = msg.get("text", "").strip().lower()
             chat_id = str(msg.get("chat", {}).get("id", ""))
+
             if text.startswith("/istatistik"):
                 yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
                 if chat_id in yetkili:
                     _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
                     print(f"[KOMUT] /istatistik islendi. chat_id={chat_id}")
+
             if text.startswith("/rapor"):
                 yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
                 if chat_id in yetkili:
                     try:
-                        img_data = raporozet_gorsel_olustur()
-                        base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-                        requests.post(f"{base}/sendPhoto",
-                            data={"chat_id": chat_id},
-                            files={"photo": ("rapor.jpg", img_data, "image/jpeg")},
-                            timeout=30)
+                        if PIL_AVAILABLE:
+                            img_data = raporozet_gorsel_olustur()
+                            base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+                            requests.post(f"{base}/sendPhoto",
+                                data={"chat_id": chat_id},
+                                files={"photo": ("rapor.jpg", img_data, "image/jpeg")},
+                                timeout=30)
+                        else:
+                            _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
                     except Exception as e:
                         print(f"[RAPOR] Gorsel hatasi: {e}")
                         _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
-                        print(f"[KOMUT] /rapor islendi. chat_id={chat_id}")
-                    return jsonify({"status": "ok"}), 200
+                    print(f"[KOMUT] /rapor islendi. chat_id={chat_id}")
+
+            return jsonify({"status": "ok"}), 200
     except:
         pass
+
     # Normal TradingView sinyali
     imageurl = None
     tp1 = tp2 = tp3 = sl = None
@@ -774,44 +802,16 @@ def health():
         "status": "running",
         "time": time.strftime("%Y-%m-%d %H:%M UTC"),
         "toplam_sinyal": ist["toplam"],
-        "basari_oran": f"%{ist['basari_oran']}"
+        "basari_oran": f"%{ist['basari_oran']}",
+        "veri_dosyasi": VERI_DOSYASI
     })
 
 
 # ==========================================
 # BAŞLAT
 # ==========================================
-# Gunicorn ile çalışırken de başlangıç işlemlerini yap
-# ==========================================
-# BAŞLAT
-# ==========================================
+
 VERI_DOSYASI = os.getenv("VERI_DOSYASI", "/data/sinyaller.json")
-
-def dosyadan_yukle():
-    global gunluk_sinyaller
-    try:
-        if not os.path.exists(VERI_DOSYASI):
-            print("[DOSYA] Veri dosyasi bulunamadi, temiz baslaniyor.")
-            return
-        with open(VERI_DOSYASI, "r", encoding="utf-8") as f:
-            veriler = json.load(f)
-        sinir = time.time() - 30 * 86400
-        veriler = [s for s in veriler if s.get("zaman", 0) > sinir]
-        with gunluk_kilit:
-            gunluk_sinyaller = veriler
-        print(f"[DOSYA] {len(veriler)} sinyal yuklendi.")
-    except Exception as e:
-        print(f"[DOSYA] Okuma hatasi: {e}")
-
-def dosyaya_kaydet():
-    try:
-        os.makedirs(os.path.dirname(VERI_DOSYASI), exist_ok=True)
-        with open(VERI_DOSYASI, "w", encoding="utf-8") as f:
-            json.dump(gunluk_sinyaller, f, ensure_ascii=False, indent=2)
-        print(f"[DOSYA] {len(gunluk_sinyaller)} sinyal kaydedildi.")
-    except Exception as e:
-        print(f"[DOSYA] Yazma hatasi: {e}")
-
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
