@@ -496,7 +496,7 @@ def raporozet_gorsel_olustur():
     satirlar = []
     for sym, v in sorted(pariteler.items(), key=lambda x: -x[1]["toplam"]):
         oran = round(v["tp"] / v["kontrol"] * 100, 1) if v["kontrol"] > 0 else 0
-        satirlar.append((sym, v["toplam"], v["tp"], v["sl"], oran))
+        satirlar.append(f"{i+1:>2}. {saat} | {sym[:6]:<6} | {s['sinyal'][:8]:<8} | {tp_durum}")
 
     satir_yuksekligi = 44
     ust_bolum = 210
@@ -607,7 +607,7 @@ def _ozet_gonder():
 
     b        = istatistik_hesapla(gun_filtre=bugun)
     satirlar = []
-    for s in bugun_sinyaller:
+    for i, s in enumerate(bugun_sinyaller):
         if TR_TZ:
             dt = datetime.fromtimestamp(s["zaman"], tz=TR_TZ)
         else:
@@ -622,7 +622,7 @@ def _ozet_gonder():
             tp_durum = f"{tp_g}/{tp_t}TP {sl_d}".strip()
         else:
             tp_durum = "bekl."
-        satirlar.append(f"{saat} | {sym[:6]:<6} | {s['sinyal'][:8]:<8} | {tp_durum}")
+        satirlar.append(f"{i+1:>2}. {saat} | {sym[:6]:<6} | {s['sinyal'][:8]:<8} | {tp_durum}")
 
     mesaj = (
         f"<b>Gunluk Ozet — {bugun}</b>\n\n"
