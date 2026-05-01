@@ -657,19 +657,41 @@ def health():
 # BAŞLAT
 # ==========================================
 # Gunicorn ile çalışırken de başlangıç işlemlerini yap
+# ==========================================
+# BAŞLAT
+# ==========================================
 VERI_DOSYASI = os.getenv("VERI_DOSYASI", "/data/sinyaller.json")
+
+def dosyadan_yukle():
+    global gunluk_sinyaller
+    try:
+        if not os.path.exists(VERI_DOSYASI):
+            print("[DOSYA] Veri dosyasi bulunamadi, temiz baslaniyor.")
+            return
+        with open(VERI_DOSYASI, "r", encoding="utf-8") as f:
+            veriler = json.load(f)
+        sinir = time.time() - 30 * 86400
+        veriler = [s for s in veriler if s.get("zaman", 0) > sinir]
+        with gunluk_kilit:
+            gunluk_sinyaller = veriler
+        print(f"[DOSYA] {len(veriler)} sinyal yuklendi.")
+    except Exception as e:
+        print(f"[DOSYA] Okuma hatasi: {e}")
+
+def dosyaya_kaydet():
+    try:
+        os.makedirs(os.path.dirname(VERI_DOSYASI), exist_ok=True)
+        with open(VERI_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(gunluk_sinyaller, f, ensure_ascii=False, indent=2)
+        print(f"[DOSYA] {len(gunluk_sinyaller)} sinyal kaydedildi.")
+    except Exception as e:
+        print(f"[DOSYA] Yazma hatasi: {e}")
+
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    print(f"Sunucu baslatiliyor -> http://0.0.0.0:{port}/webhook")
-    app.run(host="0.0.0.0", port=port, debug=False)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
-    dosyadan_yukle()
-    threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
     print(f"Sunucu baslatiliyor -> http://0.0.0.0:{port}/webhook")
     app.run(host="0.0.0.0", port=port, debug=False)
