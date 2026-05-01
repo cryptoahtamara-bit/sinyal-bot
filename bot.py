@@ -609,7 +609,7 @@ def webhook():
             msg     = data["message"]
             text    = msg.get("text", "").strip().lower()
             chat_id = str(msg.get("chat", {}).get("id", ""))
-            if text.startswith("/istatistik"):
+if text.startswith("/istatistik"):
     yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
     if chat_id in yetkili:
         _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
