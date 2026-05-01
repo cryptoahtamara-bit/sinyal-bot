@@ -549,14 +549,15 @@ def raporozet_gorsel_olustur():
     draw.text((350, tablo_y + 10), "SL", font=font_kucuk, fill=(180, 210, 255))
     draw.text((440, tablo_y + 10), "Basari", font=font_kucuk, fill=(180, 210, 255))
 
-    for i, (sym, top, tp, sl, oran) in enumerate(satirlar):
-        y = tablo_y + 38 + i * satir_yuksekligi
-        satir_renk = (20, 32, 60) if i % 2 == 0 else (25, 40, 75)
+    for idx, (sym, top, tp, sl, oran) in enumerate(satirlar):
+        y = tablo_y + 38 + idx * satir_yuksekligi
+        satir_renk = (20, 32, 60) if idx % 2 == 0 else (25, 40, 75)
         draw.rectangle([0, y, genislik, y + satir_yuksekligi], fill=satir_renk)
-        draw.text((20,  y + 9), sym, font=font_normal, fill=(255, 255, 255))
-        draw.text((160, y + 9), str(top), font=font_normal, fill=(200, 220, 255))
-        draw.text((270, y + 9), str(tp), font=font_normal, fill=(80, 220, 140))
-        draw.text((350, y + 9), str(sl), font=font_normal, fill=(220, 100, 100))
+        draw.text((20,  y + 9), str(idx+1), font=font_normal, fill=(150, 170, 210))
+        draw.text((55,  y + 9), sym,        font=font_normal, fill=(255, 255, 255))
+        draw.text((170, y + 9), str(top),   font=font_normal, fill=(200, 220, 255))
+        draw.text((270, y + 9), str(tp),    font=font_normal, fill=(80, 220, 140))
+        draw.text((350, y + 9), str(sl),    font=font_normal, fill=(220, 100, 100))
         oran_renk2 = (80, 220, 140) if oran >= 50 else (224, 180, 80) if oran >= 30 else (220, 100, 100)
         draw.text((440, y + 9), f"%{oran}", font=font_normal, fill=oran_renk2)
 
