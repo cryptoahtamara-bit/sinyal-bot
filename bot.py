@@ -211,7 +211,7 @@ def format_mesaj(symbol, price, timeframe, sinyal, tp1=None, tp2=None, tp3=None,
         f"⚡ {symbol}\n"
         f"{sinyal_emoji(sinyal)}\n"
         f"⏰ {tf_goster}\n"
-        f"\n💰 Giris: {fmt_fiyat(price)}\n"
+        f"\n💰 Giris (Entry): {fmt_fiyat(price)}\n"
     )
     if sl:
         msg += f"🚪 Cikis (SL): {fmt_fiyat(sl)}\n"
@@ -587,7 +587,7 @@ def parse_plain(raw: str):
         elif line.startswith("TP3 "): tp3 = line[4:].strip()
         elif line.lower().startswith("cikis:"):
             sl = line.split(":", 1)[1].strip()
-        elif line.lower().startswith("giris:"):
+        elif line.lower().startswith("Giris (Entry):"):
             price = line.split(":", 1)[1].strip()
     return symbol, price, timeframe, sinyal if sinyal else "SINYAL", tp1, tp2, tp3, sl
 
