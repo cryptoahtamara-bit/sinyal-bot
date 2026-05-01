@@ -501,17 +501,17 @@ def raporozet_gorsel_olustur():
     satir_yuksekligi = 44
     ust_bolum = 210
     tablo_yuksekligi = max(len(satirlar), 1) * satir_yuksekligi + 50
-    genislik = 800
+    genislik = 500
     yukseklik = ust_bolum + tablo_yuksekligi + 20
 
     img = Image.new("RGB", (genislik, yukseklik), color=(15, 20, 40))
     draw = ImageDraw.Draw(img)
 
     try:
-        font_baslik = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
-        font_buyuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-        font_normal = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
-        font_kucuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+        font_baslik = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 50)
+        font_buyuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 50)
+        font_normal = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 50)
+        font_kucuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 50)
     except:
         font_baslik = ImageFont.load_default()
         font_buyuk  = ImageFont.load_default()
