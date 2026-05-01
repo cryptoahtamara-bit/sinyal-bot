@@ -605,8 +605,8 @@ def webhook():
     # Telegram bot komutu mu?
     try:
         data = json.loads(raw)
-        if isinstance(data, dict) and "message" in data:
-            msg     = data["message"]
+        if isinstance(data, dict) and ("message" in data or "channel_post" in data):
+            msg     = data.get("message") or data.get("channel_post")
             text    = msg.get("text", "").strip().lower()
             chat_id = str(msg.get("chat", {}).get("id", ""))
             if text.startswith("/istatistik"):
