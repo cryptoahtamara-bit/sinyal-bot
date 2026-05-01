@@ -657,10 +657,10 @@ def health():
 # BAŞLAT
 # ==========================================
 # Gunicorn ile çalışırken de başlangıç işlemlerini yap
+VERI_DOSYASI = os.getenv("VERI_DOSYASI", "/data/sinyaller.json")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
-
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     print(f"Sunucu baslatiliyor -> http://0.0.0.0:{port}/webhook")
