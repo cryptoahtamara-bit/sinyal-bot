@@ -659,6 +659,8 @@ def health():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
+    print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
+    dosyadan_yukle()
     threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
     print(f"Sunucu baslatiliyor -> http://0.0.0.0:{port}/webhook")
     app.run(host="0.0.0.0", port=port, debug=False)
