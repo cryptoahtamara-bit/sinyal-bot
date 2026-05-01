@@ -2,6 +2,8 @@ import os, time, json, re, threading, requests
 from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from PIL import Image, ImageDraw, ImageFont
+import io
 
 try:
     import pytz
@@ -470,7 +472,98 @@ def istatistik_mesaji():
         f"🏆 Başarı Oranı: <b>%{t['basari_oran']}</b>"
     )
     return mesaj
+    
+def raporozet_gorsel_olustur():
+    bugun = gun_str()
+    b = istatistik_hesapla(gun_filtre=bugun)
+    with gunluk_kilit:
+        kayitlar = [s for s in gunluk_sinyaller if s["gun"] == bugun]
 
+    pariteler = {}
+    for s in kayitlar:
+        sym = s["symbol"].replace("USDT.P", "").replace("USDT", "")
+        if sym not in pariteler:
+            pariteler[sym] = {"toplam": 0, "tp": 0, "sl": 0, "kontrol": 0}
+        pariteler[sym]["toplam"] += 1
+        kontrol = any(s[k] is not None for k in ["tp1_ok", "tp2_ok", "tp3_ok"])
+        if kontrol:
+            pariteler[sym]["kontrol"] += 1
+            if any(s[k] is True for k in ["tp1_ok", "tp2_ok", "tp3_ok"]):
+                pariteler[sym]["tp"] += 1
+            if s.get("sl_ok") is True:
+                pariteler[sym]["sl"] += 1
+
+    satirlar = []
+    for sym, v in sorted(pariteler.items(), key=lambda x: -x[1]["toplam"]):
+        oran = round(v["tp"] / v["kontrol"] * 100, 1) if v["kontrol"] > 0 else 0
+        satirlar.append((sym, v["toplam"], v["tp"], v["sl"], oran))
+
+    satir_yuksekligi = 36
+    ust_bolum = 210
+    tablo_yuksekligi = max(len(satirlar), 1) * satir_yuksekligi + 50
+    genislik = 600
+    yukseklik = ust_bolum + tablo_yuksekligi + 20
+
+    img = Image.new("RGB", (genislik, yukseklik), color=(15, 20, 40))
+    draw = ImageDraw.Draw(img)
+
+    try:
+        font_baslik = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+        font_buyuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
+        font_normal = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15)
+        font_kucuk  = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
+    except:
+        font_baslik = ImageFont.load_default()
+        font_buyuk  = ImageFont.load_default()
+        font_normal = ImageFont.load_default()
+        font_kucuk  = ImageFont.load_default()
+
+    # Başlık
+    draw.rectangle([0, 0, genislik, 55], fill=(30, 50, 90))
+    draw.text((20, 10), "BEN KUL YUTMAM", font=font_baslik, fill=(255, 200, 50))
+    draw.text((20, 32), f"ISLEM RAPORU  |  {bugun}", font=font_kucuk, fill=(160, 190, 230))
+
+    # Özet kartlar
+    kart_renk = (25, 40, 75)
+    draw.rectangle([15, 70, 190, 150], fill=kart_renk, outline=(50, 80, 140), width=1)
+    draw.text((25, 77), "Toplam Sinyal", font=font_kucuk, fill=(150, 180, 220))
+    draw.text((25, 97), str(b["toplam"]), font=font_buyuk, fill=(255, 255, 255))
+    draw.text((25, 128), f"Long {b['long']}  Short {b['short']}", font=font_kucuk, fill=(120, 160, 200))
+
+    draw.rectangle([205, 70, 395, 150], fill=kart_renk, outline=(50, 80, 140), width=1)
+    draw.text((215, 77), "TP Basari", font=font_kucuk, fill=(150, 180, 220))
+    draw.text((215, 97), f"{b['tp_basarili']} / {b['tp_kontrol']}", font=font_buyuk, fill=(80, 220, 140))
+    draw.text((215, 128), f"SL Tetiklenen: {b['sl_tetiklenen']}", font=font_kucuk, fill=(220, 100, 100))
+
+    draw.rectangle([410, 70, 585, 150], fill=kart_renk, outline=(50, 80, 140), width=1)
+    draw.text((420, 77), "Basari Orani", font=font_kucuk, fill=(150, 180, 220))
+    oran_renk = (80, 220, 140) if b["basari_oran"] >= 50 else (224, 180, 80) if b["basari_oran"] >= 30 else (220, 100, 100)
+    draw.text((420, 97), f"%{b['basari_oran']}", font=font_buyuk, fill=oran_renk)
+
+    # Tablo başlığı
+    tablo_y = ust_bolum
+    draw.rectangle([0, tablo_y, genislik, tablo_y + 38], fill=(30, 50, 90))
+    draw.text((20,  tablo_y + 10), "Parite", font=font_kucuk, fill=(180, 210, 255))
+    draw.text((160, tablo_y + 10), "Toplam", font=font_kucuk, fill=(180, 210, 255))
+    draw.text((270, tablo_y + 10), "TP", font=font_kucuk, fill=(180, 210, 255))
+    draw.text((350, tablo_y + 10), "SL", font=font_kucuk, fill=(180, 210, 255))
+    draw.text((440, tablo_y + 10), "Basari", font=font_kucuk, fill=(180, 210, 255))
+
+    for i, (sym, top, tp, sl, oran) in enumerate(satirlar):
+        y = tablo_y + 38 + i * satir_yuksekligi
+        satir_renk = (20, 32, 60) if i % 2 == 0 else (25, 40, 75)
+        draw.rectangle([0, y, genislik, y + satir_yuksekligi], fill=satir_renk)
+        draw.text((20,  y + 9), sym, font=font_normal, fill=(255, 255, 255))
+        draw.text((160, y + 9), str(top), font=font_normal, fill=(200, 220, 255))
+        draw.text((270, y + 9), str(tp), font=font_normal, fill=(80, 220, 140))
+        draw.text((350, y + 9), str(sl), font=font_normal, fill=(220, 100, 100))
+        oran_renk2 = (80, 220, 140) if oran >= 50 else (224, 180, 80) if oran >= 30 else (220, 100, 100)
+        draw.text((440, y + 9), f"%{oran}", font=font_normal, fill=oran_renk2)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    buf.seek(0)
+    return buf.getvalue()
 
 # ==========================================
 # GÜNLÜK ÖZET
@@ -617,11 +710,17 @@ def webhook():
             if text.startswith("/rapor"):
                 yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
                 if chat_id in yetkili:
-                    _ozet_gonder()
+                    try:
+                        img_data = raporozet_gorsel_olustur()
+                        base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+                        requests.post(f"{base}/sendPhoto",
+                            data={"chat_id": chat_id},
+                            files={"photo": ("rapor.jpg", img_data, "image/jpeg")},
+                            timeout=30)
+                    except Exception as e:
+                        print(f"[RAPOR] Gorsel hatasi: {e}")
+                        _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
                     print(f"[KOMUT] /rapor islendi. chat_id={chat_id}")
-            return jsonify({"status": "ok"}), 200
-    except:
-        pass
 
     # Normal TradingView sinyali
     imageurl = None
