@@ -96,6 +96,24 @@ def sinyal_kaydet(symbol, sinyal, timeframe, price, tp1, tp2, tp3, sl, message_i
         log_satir = LOG_MAGIC + json.dumps(kayit, ensure_ascii=False)
         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, log_satir)
 
+def sinyal_kaydet(symbol, sinyal, timeframe, price, tp1, tp2, tp3, sl, message_id):
+    kayit = {
+        "gun": gun_str(), "zaman": time.time(),
+        "symbol": symbol, "sinyal": sinyal,
+        "timeframe": timeframe, "price": price,
+        "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl,
+        "tp1_ok": None, "tp2_ok": None, "tp3_ok": None,
+        "sl_ok": None,
+        "message_id": message_id
+    }
+    with gunluk_kilit:
+        gunluk_sinyaller.append(kayit)
+
+    dosyaya_kaydet()  # ← BU SATIRI EKLEYİN
+
+    if TELEGRAM_LOG_ID:
+        log_satir = LOG_MAGIC + json.dumps(kayit, ensure_ascii=False)
+        _telegram_mesaj_gonder(TELEGRAM_LOG_ID, log_satir)
 
 def tp_sonuc_guncelle(message_id, tp1_ok, tp2_ok, tp3_ok, sl_ok):
     with gunluk_kilit:
