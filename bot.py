@@ -720,8 +720,10 @@ def webhook():
                     except Exception as e:
                         print(f"[RAPOR] Gorsel hatasi: {e}")
                         _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
-                    print(f"[KOMUT] /rapor islendi. chat_id={chat_id}")
-
+                        print(f"[KOMUT] /rapor islendi. chat_id={chat_id}")
+                    return jsonify({"status": "ok"}), 200
+    except:
+        pass
     # Normal TradingView sinyali
     imageurl = None
     tp1 = tp2 = tp3 = sl = None
