@@ -441,7 +441,7 @@ def istatistik_hesapla(gun_filtre=None):
         kontrol_yapildi = any(s[k] is not None for k in ["tp1_ok", "tp2_ok", "tp3_ok"])
         if kontrol_yapildi:
             tp_kontrol_yapilan += 1
-            if any(s[k] is True for k in ["tp1_ok", "tp2_ok", "tp3_ok"]):
+            if s.get("tp1_ok") is True:
                 tp_basarili += 1
             if s.get("sl_ok") is True:
                 sl_tetiklenen += 1
