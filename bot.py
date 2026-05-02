@@ -1,0 +1,1079 @@
+import os, time, json, re, threading, requests
+from datetime import datetime
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+
+try:
+    import pytz
+    TR_TZ = pytz.timezone("Europe/Istanbul")
+except:
+    TR_TZ = None
+
+load_dotenv()
+
+app = Flask(__name__)
+
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_LOG_ID  = os.getenv("TELEGRAM_LOG_ID", "")
+CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
+KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
+KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
+
+# ==========================================
+# YARDIMCI FONKSİYONLAR
+# ==========================================
+
+def tp_sure(timeframe: str) -> int:
+    tf = str(timeframe)
+    if tf in ["1", "3"]:                             return 30    # 30 dakika
+    if tf in ["5"]:                                  return 60    # 1 saat
+    if tf in ["15"]:                                 return 240   # 4 saat
+    if tf in ["30"]:                                 return 1440  # 1 gun
+    if tf in ["60","1H","240","4H","D","1D","W","1W"]: return 10080 # 1 hafta
+    return 30
+
+def gun_str(ts=None):
+    if TR_TZ:
+        dt = datetime.fromtimestamp(ts or time.time(), tz=TR_TZ)
+    else:
+        dt = datetime.utcfromtimestamp(ts or time.time())
+    return dt.strftime("%Y-%m-%d")
+
+def fmt_fiyat(val):
+    if val is None:
+        return None
+    try:
+        f = float(str(val).replace(",", "."))
+        if f >= 50:
+            return f"{f:.2f}"
+        elif f >= 1:
+            return f"{f:.4f}"
+        else:
+            return f"{f:.6f}"
+    except:
+        return str(val)
+
+fmt_tp = fmt_fiyat
+
+def sinyal_emoji(sinyal: str) -> str:
+    s = sinyal.upper()
+    if "STRONG" in s and ("BUY" in s or "LONG" in s):  return "🔥 STRONG BUY"
+    if "STRONG" in s and ("SELL" in s or "SHORT" in s): return "💀 STRONG SELL"
+    if "LONG" in s or "BUY" in s:                        return "🚀 LONG"
+    if "SHORT" in s or "SELL" in s:                      return "📉 SHORT"
+    return sinyal
+
+def get_sym(symbol: str) -> str:
+    return symbol.upper().replace(".P", "").replace("USDT.P", "USDT")
+
+# ==========================================
+# VERİ DEPOSU
+# ==========================================
+
+son_sinyal       = {"key": "", "zaman": 0}
+gunluk_sinyaller = []
+gunluk_kilit     = threading.Lock()
+LOG_MAGIC        = "#SINYAL_LOG#"
+VERI_DOSYASI     = os.getenv("VERI_DOSYASI", "/data/sinyaller.json")
+
+
+def veri_kaydet():
+    try:
+        os.makedirs(os.path.dirname(VERI_DOSYASI), exist_ok=True)
+        with gunluk_kilit:
+            veri = gunluk_sinyaller[:]
+        with open(VERI_DOSYASI, "w", encoding="utf-8") as f:
+            json.dump(veri, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"[KAYIT] Hata: {e}")
+
+
+def dosyadan_yukle():
+    global gunluk_sinyaller
+    try:
+        if os.path.exists(VERI_DOSYASI):
+            with open(VERI_DOSYASI, "r", encoding="utf-8") as f:
+                veri = json.load(f)
+            with gunluk_kilit:
+                gunluk_sinyaller = veri
+            print(f"[YUKLE] {len(veri)} sinyal yuklendi.")
+    except Exception as e:
+        print(f"[YUKLE] Hata: {e}")
+
+
+def sinyal_kaydet(symbol, sinyal, timeframe, price, tp1, tp2, tp3, tp4, tp5, sl, message_id):
+    kayit = {
+        "gun": gun_str(), "zaman": time.time(),
+        "symbol": symbol, "sinyal": sinyal,
+        "timeframe": timeframe, "price": price,
+        "tp1": tp1, "tp2": tp2, "tp3": tp3, "tp4": tp4, "tp5": tp5, "sl": sl,
+        "tp1_ok": None, "tp2_ok": None, "tp3_ok": None, "tp4_ok": None, "tp5_ok": None,
+        "sl_ok": None,
+        "message_id": message_id
+    }
+    with gunluk_kilit:
+        gunluk_sinyaller.append(kayit)
+    veri_kaydet()
+    if TELEGRAM_LOG_ID:
+        log_satir = LOG_MAGIC + json.dumps(kayit, ensure_ascii=False)
+        _telegram_mesaj_gonder(TELEGRAM_LOG_ID, log_satir)
+
+
+def tp_sonuc_guncelle(message_id, tp1_ok, tp2_ok, tp3_ok, tp4_ok, tp5_ok, sl_ok):
+    with gunluk_kilit:
+        for s in gunluk_sinyaller:
+            if s["message_id"] == message_id:
+                s["tp1_ok"] = tp1_ok
+                s["tp2_ok"] = tp2_ok
+                s["tp3_ok"] = tp3_ok
+                s["tp4_ok"] = tp4_ok
+                s["tp5_ok"] = tp5_ok
+                s["sl_ok"]  = sl_ok
+                break
+    veri_kaydet()
+
+
+# ==========================================
+# TELEGRAM GÖNDERİCİLER
+# ==========================================
+
+def _telegram_mesaj_gonder(chat_id, metin, reply_to=None, parse_mode="HTML"):
+    base    = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+    payload = {"chat_id": chat_id, "text": metin, "parse_mode": parse_mode}
+    if reply_to:
+        payload["reply_to_message_id"] = reply_to
+    try:
+        r = requests.post(f"{base}/sendMessage", json=payload, timeout=15)
+        return r
+    except Exception as e:
+        print(f"[TELEGRAM] Mesaj gonderme hatasi: {e}")
+        return None
+
+
+def _telegram_foto_gonder(chat_id, img_data, caption, parse_mode="HTML"):
+    base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+    try:
+        r = requests.post(f"{base}/sendPhoto",
+            data={"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode},
+            files={"photo": ("chart.png", img_data, "image/png")}, timeout=30)
+        return r
+    except Exception as e:
+        print(f"[TELEGRAM] Foto gonderme hatasi: {e}")
+        return None
+
+
+# ==========================================
+# CHART SCREENSHOT
+# ==========================================
+
+def get_screenshot_chartimg(symbol: str, timeframe: str):
+    if not CHARTIMG_KEY:
+        return None
+    tf_map = {
+        "1": "1m", "3": "3m", "5": "5m", "15": "15m", "30": "30m",
+        "60": "1h", "1H": "1h", "120": "2h", "240": "4h",
+        "D": "1D", "1D": "1D", "W": "1W", "M": "1M"
+    }
+    tf  = tf_map.get(str(timeframe), "1h")
+    sym = symbol.upper().replace(".P", "").replace("USDT.P", "USDT")
+    if not any(x in sym for x in [":", "BINANCE", "BYBIT", "MEXC"]):
+        sym = f"MEXC:{sym}"
+    url     = "https://api.chart-img.com/v1/tradingview/advanced-chart"
+    params  = {"symbol": sym, "interval": tf, "theme": "dark", "width": 800, "height": 500}
+    headers = {"x-api-key": CHARTIMG_KEY}
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        if r.status_code == 200:
+            return r.content
+        print(f"[SCREENSHOT] chart-img hata: {r.status_code}")
+    except Exception as e:
+        print(f"[SCREENSHOT] Timeout: {e}")
+    return None
+
+
+def get_screenshot_tv(imageurl: str):
+    try:
+        r = requests.get(imageurl, timeout=15)
+        if r.status_code == 200:
+            return r.content
+    except:
+        pass
+    return None
+
+
+# ==========================================
+# MESAJ FORMATI
+# ==========================================
+
+def format_mesaj(symbol, price, timeframe, sinyal, tp1=None, tp2=None, tp3=None,
+                 tp4=None, tp5=None, sl=None):
+    tf_map = {
+        "1": "1 DK", "3": "3 DK", "5": "5 DK", "15": "15 DK",
+        "30": "30 DK", "60": "1 SAAT", "1H": "1 SAAT",
+        "120": "2 SAAT", "240": "4 SAAT",
+        "D": "1 GUN", "1D": "1 GUN", "W": "1 HAFTA"
+    }
+    tf_goster = tf_map.get(str(timeframe), timeframe)
+    msg = (
+        f"❗ {KANAL_ADI} ❗\n\n"
+        f"⚡ {symbol}\n"
+        f"{sinyal_emoji(sinyal)}\n"
+        f"⏰ {tf_goster}\n"
+        f"\n💰 Giris (Entry): {fmt_fiyat(price)}\n"
+    )
+    if sl:
+        msg += f"🚪 Cikis (SL): {fmt_fiyat(sl)}\n"
+    tp_listesi = [tp1, tp2, tp3, tp4, tp5]
+    tp_satirlari = [(i+1, tp) for i, tp in enumerate(tp_listesi) if tp and str(tp) != 'null']
+    if tp_satirlari:
+        msg += "\n"
+        for num, tp in tp_satirlari:
+            msg += f"🎯 TP{num}: {fmt_tp(tp)}\n"
+    msg += f"\nSiz de kulube katilip, alarmlari kacirmamak icin lutfen iletisime gecin.\nIletisim: {KANAL_TAG}"
+    return msg
+
+
+# ==========================================
+# FİYAT VERİSİ
+# ==========================================
+
+def get_mexc_price(symbol: str) -> float:
+    sym = get_sym(symbol)
+    if not sym.endswith("USDT"):
+        sym += "USDT"
+    for api_url in [
+        f"https://api.mexc.com/api/v3/ticker/price?symbol={sym}",
+        f"https://api.binance.com/api/v3/ticker/price?symbol={sym}"
+    ]:
+        try:
+            r = requests.get(api_url, timeout=10)
+            if r.status_code == 200:
+                return float(r.json()["price"])
+        except:
+            pass
+    return None
+
+
+def get_high_low_in_period(symbol: str, start_ts: int, end_ts: int):
+    sym = get_sym(symbol)
+    if not sym.endswith("USDT"):
+        sym += "USDT"
+    for api_url in ["https://api.mexc.com/api/v3/klines", "https://api.binance.com/api/v3/klines"]:
+        try:
+            params = {
+                "symbol": sym, "interval": "1m",
+                "startTime": start_ts * 1000,
+                "endTime":   end_ts   * 1000,
+                "limit": 1500
+            }
+            r = requests.get(api_url, params=params, timeout=10)
+            if r.status_code == 200:
+                klines = r.json()
+                if klines:
+                    return max(float(k[2]) for k in klines), min(float(k[3]) for k in klines)
+        except Exception as e:
+            print(f"[TP] kline hata ({api_url}): {e}")
+    return None, None
+
+
+# ==========================================
+# TP + SL KONTROL
+# ==========================================
+
+def tp_kontrol_gonder(symbol, sinyal, tp1, tp2, tp3, tp4, tp5, sl,
+                      message_id, dakika, sinyal_ts, sinyal_fiyat=None):
+    is_long  = any(x in sinyal.upper() for x in ["BUY", "LONG"])
+    is_short = any(x in sinyal.upper() for x in ["SELL", "SHORT"])
+
+    def tp_ulasti(tp_fiyat, yuksek, dusuk):
+        if tp_fiyat is None or str(tp_fiyat) == 'null':
+            return False
+        try:
+            tp = float(str(tp_fiyat).replace(",", "."))
+            if is_long:  return yuksek >= tp
+            if is_short: return dusuk  <= tp
+        except:
+            pass
+        return False
+
+    def sl_tetiklendi(sl_fiyat, yuksek, dusuk):
+        if sl_fiyat is None or str(sl_fiyat) == 'null':
+            return False
+        try:
+            s = float(str(sl_fiyat).replace(",", "."))
+            if is_long:  return dusuk  <= s
+            if is_short: return yuksek >= s
+        except:
+            pass
+        return False
+
+    def mesaj_olustur(tp1_ok, tp2_ok, tp3_ok, tp4_ok, tp5_ok, sl_ok, erken=False):
+        fiyat_str     = fmt_fiyat(sinyal_fiyat) if sinyal_fiyat else ""
+        sinyal_etiket = sinyal_emoji(sinyal)
+        baslik = "⚡ <b>Erken TP/SL Bildirimi</b>" if erken else "<b>TP ve SL Kontrol</b>"
+        msg = (
+            f"{baslik}\n\n"
+            f"⚡ {symbol}"
+            + (f" | 💰 {fiyat_str}" if fiyat_str else "")
+            + f" | {sinyal_etiket}\n\n"
+        )
+        tp_kontroller = [
+            (tp1, tp1_ok, "TP1"), (tp2, tp2_ok, "TP2"), (tp3, tp3_ok, "TP3"),
+            (tp4, tp4_ok, "TP4"), (tp5, tp5_ok, "TP5"),
+        ]
+        for tp_val, tp_ok, tp_label in tp_kontroller:
+            if tp_val and str(tp_val) != 'null':
+                msg += f"🎯 {tp_label}: {fmt_tp(tp_val)} — {'✅ ULASILDI' if tp_ok else '❌ Ulasilmadi'}\n"
+        if sl and str(sl) != 'null':
+            msg += f"🚪 SL: {fmt_fiyat(sl)} — {'⛔ TETİKLENDİ' if sl_ok else '— Bekleniyor'}\n"
+        return msg
+
+    def bildirim_gonder(msg):
+        resp = _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, msg, reply_to=message_id)
+        if resp and resp.status_code == 200:
+            print(f"[TP] {symbol} bildirim gonderildi.")
+        if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
+            _telegram_mesaj_gonder(TELEGRAM_LOG_ID, msg)
+
+    kontrol_araligi           = 60
+    toplam_sure               = dakika * 60
+    gecen_sure                = 0
+    erken_bildirim_gonderildi = False
+
+    while gecen_sure < toplam_sure:
+        time.sleep(kontrol_araligi)
+        gecen_sure += kontrol_araligi
+
+        end_ts        = int(time.time())
+        yuksek, dusuk = get_high_low_in_period(symbol, sinyal_ts, end_ts)
+        if yuksek is None:
+            continue
+
+        tp1_ok = tp_ulasti(tp1, yuksek, dusuk)
+        tp2_ok = tp_ulasti(tp2, yuksek, dusuk)
+        tp3_ok = tp_ulasti(tp3, yuksek, dusuk)
+        tp4_ok = tp_ulasti(tp4, yuksek, dusuk)
+        tp5_ok = tp_ulasti(tp5, yuksek, dusuk)
+        sl_ok  = sl_tetiklendi(sl, yuksek, dusuk)
+
+        if (any([tp1_ok, tp2_ok, tp3_ok, tp4_ok, tp5_ok]) or sl_ok) and not erken_bildirim_gonderildi:
+            msg = mesaj_olustur(tp1_ok, tp2_ok, tp3_ok, tp4_ok, tp5_ok, sl_ok, erken=True)
+            bildirim_gonder(msg)
+            erken_bildirim_gonderildi = True
+
+            if sl_ok:
+                sl_mesaj = (
+                    f"⛔ <b>SL TETİKLENDİ</b>\n\n"
+                    f"⚡ {symbol} | {sinyal_emoji(sinyal)}\n"
+                    f"🚪 SL Seviyesi: {fmt_fiyat(sl)}"
+                )
+                bildirim_gonder(sl_mesaj)
+
+            tp_sonuc_guncelle(message_id, tp1_ok, tp2_ok, tp3_ok, tp4_ok, tp5_ok, sl_ok)
+            return
+
+    end_ts        = int(time.time())
+    yuksek, dusuk = get_high_low_in_period(symbol, sinyal_ts, end_ts)
+    if yuksek is None:
+        guncel = get_mexc_price(symbol)
+        yuksek = dusuk = guncel
+
+    tp1_ok = tp_ulasti(tp1, yuksek, dusuk)
+    tp2_ok = tp_ulasti(tp2, yuksek, dusuk)
+    tp3_ok = tp_ulasti(tp3, yuksek, dusuk)
+    tp4_ok = tp_ulasti(tp4, yuksek, dusuk)
+    tp5_ok = tp_ulasti(tp5, yuksek, dusuk)
+    sl_ok  = sl_tetiklendi(sl, yuksek, dusuk)
+
+    if not erken_bildirim_gonderildi:
+        msg = mesaj_olustur(tp1_ok, tp2_ok, tp3_ok, tp4_ok, tp5_ok, sl_ok, erken=False)
+        bildirim_gonder(msg)
+
+    tp_sonuc_guncelle(message_id, tp1_ok, tp2_ok, tp3_ok, tp4_ok, tp5_ok, sl_ok)
+
+
+# ==========================================
+# SINYAL GÖNDER + TP PLANLA
+# ==========================================
+
+def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal,
+                                   tp1, tp2, tp3, tp4, tp5, sl,
+                                   imageurl=None, price=None):
+    img_data = None
+    if imageurl:
+        img_data = get_screenshot_tv(imageurl)
+    if not img_data:
+        img_data = get_screenshot_chartimg(symbol, timeframe)
+
+    message_id = None
+    if img_data:
+        resp = _telegram_foto_gonder(TELEGRAM_CHAT_ID, img_data, caption)
+    else:
+        resp = _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, caption)
+
+    if resp and resp.status_code == 200:
+        message_id = resp.json().get("result", {}).get("message_id")
+        print(f"[OK] {symbol} gonderildi. message_id={message_id}")
+    else:
+        print(f"[HATA] {resp.status_code if resp else 'baglanti yok'}")
+        return
+
+    if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
+        _telegram_mesaj_gonder(TELEGRAM_LOG_ID, caption)
+
+    if message_id:
+        sinyal_kaydet(symbol, sinyal, timeframe, price, tp1, tp2, tp3, tp4, tp5, sl, message_id)
+
+    tp_var = any(x and str(x) != 'null' for x in [tp1, tp2, tp3, tp4, tp5])
+    if message_id and tp_var:
+        sinyal_ts  = int(time.time())
+        kontrol_dk = tp_sure(timeframe)
+        t = threading.Thread(
+            target=tp_kontrol_gonder,
+            args=(symbol, sinyal, tp1, tp2, tp3, tp4, tp5, sl,
+                  message_id, kontrol_dk, sinyal_ts, price))
+        t.daemon = True
+        t.start()
+        print(f"[TP] {symbol} icin {kontrol_dk} dk sonra kontrol planlanadi.")
+
+
+# ==========================================
+# İSTATİSTİK
+# ==========================================
+
+def istatistik_hesapla(gun_filtre=None):
+    with gunluk_kilit:
+        kayitlar = [
+            s for s in gunluk_sinyaller
+            if gun_filtre is None or s["gun"] == gun_filtre
+        ]
+    tp_basarili   = 0
+    sl_tetiklenen = 0
+    devam_eden    = 0
+    long_sayisi   = 0
+    short_sayisi  = 0
+
+    for s in kayitlar:
+        sin = s["sinyal"].upper()
+        if any(x in sin for x in ["BUY", "LONG"]):
+            long_sayisi += 1
+        else:
+            short_sayisi += 1
+        kontrol_yapildi = any(s.get(k) is not None for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"])
+        if kontrol_yapildi:
+            if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
+                tp_basarili += 1
+            elif s.get("sl_ok") is True:
+                sl_tetiklenen += 1
+            else:
+                devam_eden += 1
+        else:
+            devam_eden += 1
+
+    kapanan     = tp_basarili + sl_tetiklenen
+    toplam      = kapanan + devam_eden
+    basari_oran = round(tp_basarili / kapanan * 100, 1) if kapanan > 0 else 0
+    return {
+        "toplam": toplam, "long": long_sayisi, "short": short_sayisi,
+        "tp_basarili": tp_basarili, "sl_tetiklenen": sl_tetiklenen,
+        "devam_eden": devam_eden, "kapanan": kapanan, "basari_oran": basari_oran
+    }
+
+
+def istatistik_mesaji():
+    bugun = gun_str()
+    b     = istatistik_hesapla(gun_filtre=bugun)
+    t     = istatistik_hesapla()
+
+    with gunluk_kilit:
+        bugun_kayitlar = [s for s in gunluk_sinyaller if s["gun"] == bugun]
+
+    # En başarılı sembol (bugün, min 3 sinyal)
+    sym_stats = {}
+    for s in bugun_kayitlar:
+        sym = sembol_grup(s["symbol"])
+        if sym not in sym_stats:
+            sym_stats[sym] = {"toplam": 0, "basarili": 0}
+        sym_stats[sym]["toplam"] += 1
+        if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
+            sym_stats[sym]["basarili"] += 1
+
+    en_sym = max(
+        ((sym, st["basarili"]/st["toplam"]*100) for sym, st in sym_stats.items() if st["toplam"] >= 3),
+        key=lambda x: x[1], default=("", -1)
+    )
+
+    # En başarılı zaman dilimi (bugün, min 3 sinyal)
+    tf_map_g = {"1":"1DK","3":"3DK","5":"5DK","15":"15DK","30":"30DK",
+                "60":"1SA","1H":"1SA","240":"4SA","D":"1G","1D":"1G"}
+    tf_stats = {}
+    for s in bugun_kayitlar:
+        tf = s.get("timeframe","?")
+        if tf not in tf_stats:
+            tf_stats[tf] = {"toplam": 0, "basarili": 0}
+        tf_stats[tf]["toplam"] += 1
+        if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
+            tf_stats[tf]["basarili"] += 1
+
+    en_tf = max(
+        ((tf_map_g.get(tf,tf), st["basarili"]/st["toplam"]*100) for tf, st in tf_stats.items() if st["toplam"] >= 3),
+        key=lambda x: x[1], default=("", -1)
+    )
+
+    mesaj = (
+        f"\\U0001f4ca <b>BEN K\\xdcL YUTMAM \\u2014 \\u0130statistik</b>\\n\\n"
+        f"<b>\\u2014 Bug\\xfcn ({bugun}) \\u2014</b>\\n"
+        f"\\U0001f4e8 Toplam Sinyal: <b>{b['toplam']}</b>  (\\U0001f680 {b['long']} Long | \\U0001f4c9 {b['short']} Short)\\n"
+        f"\\u2705 TP Ba\\u015far\\u0131l\\u0131: <b>{b['tp_basarili']}</b>\\n"
+        f"\\u26d4 SL Tetiklenen: <b>{b['sl_tetiklenen']}</b>\\n"
+        f"\\u23f3 Devam Eden: <b>{b['devam_eden']}</b>\\n"
+        f"\\U0001f3c6 Ba\\u015far\\u0131 Oran\\u0131: <b>%{b['basari_oran']}</b> ({b['tp_basarili']}/{b['kapanan']})\\n"
+    )
+    if en_sym[0]:
+        mesaj += f"\\U0001f947 En Ba\\u015far\\u0131l\\u0131 Sembol: <b>{en_sym[0]}</b> (%{round(en_sym[1],1)})\\n"
+    if en_tf[0]:
+        mesaj += f"\\u23f1 En Ba\\u015far\\u0131l\\u0131 Zaman Dilimi: <b>{en_tf[0]}</b> (%{round(en_tf[1],1)})\\n"
+    mesaj += (
+        f"\\n<b>\\u2014 T\\xfcm Zamanlar \\u2014</b>\\n"
+        f"\\U0001f4e8 Toplam Sinyal: <b>{t['toplam']}</b>  (\\U0001f680 {t['long']} Long | \\U0001f4c9 {t['short']} Short)\\n"
+        f"\\u2705 TP Ba\\u015far\\u0131l\\u0131: <b>{t['tp_basarili']}</b>\\n"
+        f"\\u26d4 SL Tetiklenen: <b>{t['sl_tetiklenen']}</b>\\n"
+        f"\\U0001f3c6 Ba\\u015far\\u0131 Oran\\u0131: <b>%{t['basari_oran']}</b> ({t['tp_basarili']}/{t['kapanan']})"
+    )
+    return mesaj
+
+
+# ==========================================
+# RAPOR
+# ==========================================
+
+def bar_str(oran, genislik=5):
+    dolu = round(oran / 100 * genislik)
+    bos  = genislik - dolu
+    return "\u2588" * dolu + "\u2591" * bos
+
+
+def sembol_grup(symbol: str) -> str:
+    s = symbol.upper().replace("USDT.P","").replace("USDT","").replace(".P","")
+    for ana in ["BTC","ETH","BNB","SOL","XRP","AVAX","DOGE","ADA","DOT","LINK",
+                "MATIC","TRX","TON","HYPE","LTC","NEAR","HBAR","SUI","XMR","ZEC","XLM"]:
+        if s.startswith(ana):
+            return ana
+    return "OTHERS"
+
+
+def rapor_hesapla(gun: str):
+    with gunluk_kilit:
+        kayitlar = [s for s in gunluk_sinyaller if s["gun"] == gun]
+
+    tf_siralama = ["1","5","15","60","240","D"]
+    tf_goster   = {"1":"1DK","5":"5DK","15":"15DK","60":"1SA","240":"4SA","D":"1G"}
+
+    matris = {}
+    tf_set = set()
+    for s in kayitlar:
+        grup = sembol_grup(s["symbol"])
+        tf   = s.get("timeframe","?")
+        if tf in tf_goster:
+            tf_set.add(tf)
+        if grup not in matris:
+            matris[grup] = {}
+        if tf not in matris[grup]:
+            matris[grup][tf] = {"toplam":0,"basarili":0}
+        matris[grup][tf]["toplam"] += 1
+        if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
+            matris[grup][tf]["basarili"] += 1
+
+    tf_kullanilan = [tf for tf in tf_siralama if tf in tf_set]
+
+    toplam_satir = {tf: {"toplam":0,"basarili":0} for tf in tf_kullanilan}
+    for grup, tfler in matris.items():
+        for tf, st in tfler.items():
+            if tf in toplam_satir:
+                toplam_satir[tf]["toplam"]   += st["toplam"]
+                toplam_satir[tf]["basarili"] += st["basarili"]
+
+    return matris, toplam_satir, tf_kullanilan, tf_goster, kayitlar
+
+
+def rapor_mesaji(gun: str) -> str:
+    matris, toplam_satir, tf_kullanilan, tf_goster, kayitlar = rapor_hesapla(gun)
+
+    if not kayitlar:
+        return f"\U0001f4ed <b>{gun}</b> tarihine ait sinyal bulunamad\u0131."
+
+    toplam_sinyal   = len(kayitlar)
+    toplam_basarili = sum(1 for s in kayitlar
+                         if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]))
+    toplam_sl       = sum(1 for s in kayitlar if s.get("sl_ok") is True)
+    kontrol_yapilan = sum(1 for s in kayitlar
+                         if any(s.get(k) is not None for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]))
+    genel_oran      = round(toplam_basarili / kontrol_yapilan * 100, 1) if kontrol_yapilan else 0
+
+    msg  = f"\U0001f4ca <b>BEN K\xdcL YUTMAM &amp; PAR\u0130TE \xd7 T\u0130MEFRAME RAPORU</b>\n"
+    msg += f"<b>{gun}</b>\n\n"
+    msg += (f"Toplam Sinyal: <b>{toplam_sinyal}</b>   "
+            f"TP Ba\u015far\u0131l\u0131: <b>{toplam_basarili}/{kontrol_yapilan}</b>   "
+            f"Genel Ba\u015far\u0131: <b>%{genel_oran}</b>\n"
+            f"SL: <b>{toplam_sl}</b>\n\n")
+
+    if not tf_kullanilan:
+        msg += "Hen\xfcz tamamlanm\u0131\u015f sinyal yok."
+        return msg
+
+    # Tablo — monospace
+    col_w = 8
+    tf_basliklar = "  ".join(f"{tf_goster[tf]:>{col_w}}" for tf in tf_kullanilan)
+    msg += f"<code>{'Parite':<8}  {tf_basliklar}  {'TOPLAM':>{col_w}}\n"
+    msg += "\u2500" * (10 + len(tf_kullanilan) * (col_w+2) + col_w + 2) + "\n"
+
+    for grup in sorted(matris.keys(), key=lambda x: (x == "OTHERS", x)):
+        tfler = matris[grup]
+        satir_yuzde = f"{grup:<8}"
+        satir_oran  = " " * 8
+        satir_bar   = " " * 8
+        g_top = g_bas = 0
+        for tf in tf_kullanilan:
+            st = tfler.get(tf, {"toplam":0,"basarili":0})
+            g_top += st["toplam"]
+            g_bas += st["basarili"]
+            if st["toplam"] > 0:
+                o = st["basarili"] / st["toplam"] * 100
+                satir_yuzde += f"  %{o:>5.1f}"
+                satir_oran  += f"  {st['basarili']}/{st['toplam']:<5}"
+                satir_bar   += f"  {bar_str(o):<7}"
+            else:
+                satir_yuzde += f"  {'No':>{col_w}}"
+                satir_oran  += f"  {'0/0':>{col_w}}"
+                satir_bar   += f"  {'':>{col_w}}"
+        if g_top > 0:
+            go = g_bas / g_top * 100
+            satir_yuzde += f"  %{go:>5.1f}"
+            satir_oran  += f"  {g_bas}/{g_top}"
+            satir_bar   += f"  {bar_str(go)}"
+        msg += satir_yuzde + "\n" + satir_oran + "\n" + satir_bar + "\n\n"
+
+    # TOPLAM satırı
+    msg += "\u2500" * (10 + len(tf_kullanilan) * (col_w+2) + col_w + 2) + "\n"
+    satir_t_y = f"{'TOPLAM':<8}"
+    satir_t_o = " " * 8
+    satir_t_b = " " * 8
+    gt_top = gt_bas = 0
+    for tf in tf_kullanilan:
+        st = toplam_satir.get(tf, {"toplam":0,"basarili":0})
+        gt_top += st["toplam"]
+        gt_bas += st["basarili"]
+        if st["toplam"] > 0:
+            o = st["basarili"] / st["toplam"] * 100
+            satir_t_y += f"  %{o:>5.1f}"
+            satir_t_o += f"  {st['basarili']}/{st['toplam']:<5}"
+            satir_t_b += f"  {bar_str(o):<7}"
+        else:
+            satir_t_y += f"  {'No':>{col_w}}"
+            satir_t_o += f"  {'0/0':>{col_w}}"
+            satir_t_b += f"  {'':>{col_w}}"
+    if gt_top > 0:
+        go = gt_bas / gt_top * 100
+        satir_t_y += f"  %{go:>5.1f}"
+        satir_t_o += f"  {gt_bas}/{gt_top}"
+        satir_t_b += f"  {bar_str(go)}"
+    msg += satir_t_y + "\n" + satir_t_o + "\n" + satir_t_b + "\n</code>"
+    return msg
+
+
+def rapor_gorsel(gun: str):
+    """Raporu PNG olarak üretir, bytes döndürür. matplotlib gerektirir."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        from matplotlib.patches import FancyBboxPatch
+        import io
+    except ImportError:
+        return None
+
+    matris, toplam_satir, tf_kullanilan, tf_goster, kayitlar = rapor_hesapla(gun)
+    if not kayitlar:
+        return None
+
+    toplam_sinyal   = len(kayitlar)
+    toplam_basarili = sum(1 for s in kayitlar
+                         if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]))
+    toplam_sl       = sum(1 for s in kayitlar if s.get("sl_ok") is True)
+    kontrol         = sum(1 for s in kayitlar
+                         if any(s.get(k) is not None for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]))
+    genel_oran      = round(toplam_basarili / kontrol * 100, 1) if kontrol else 0
+
+    semboller = sorted(matris.keys(), key=lambda x: (x == "OTHERS", x))
+    n_sym = len(semboller) + 1  # +1 TOPLAM satırı
+    n_tf  = len(tf_kullanilan) + 1  # +1 TOPLAM sütunu
+
+    # Renk fonksiyonu
+    def bar_color(p):
+        if p is None: return "#CCCCCC"
+        if p >= 60: return "#639922"
+        if p >= 35: return "#BA7517"
+        return "#E24B4A"
+
+    def bg_color(p):
+        if p is None: return "#F5F5F5"
+        if p >= 60: return "#EAF3DE"
+        if p >= 35: return "#FAEEDA"
+        return "#FCEBEB"
+
+    # Figür boyutu
+    col_w = 1.4
+    row_h = 0.85
+    fig_w = 2.2 + n_tf * col_w
+    fig_h = 3.2 + n_sym * row_h
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.set_xlim(0, fig_w)
+    ax.set_ylim(0, fig_h)
+    ax.axis("off")
+    fig.patch.set_facecolor("#FFFFFF")
+
+    # Başlık
+    ax.text(fig_w/2, fig_h - 0.25, "BEN KÜL YUTMAM — Günlük Rapor",
+            ha="center", va="top", fontsize=13, fontweight="bold", color="#1A1A1A")
+    ax.text(fig_w/2, fig_h - 0.55, gun,
+            ha="center", va="top", fontsize=10, color="#666666")
+
+    # Özet metrikler
+    metrics = [
+        ("Toplam Sinyal", str(toplam_sinyal), "#1A1A1A"),
+        ("TP Başarılı",   f"{toplam_basarili}/{kontrol}", "#3B6D11"),
+        ("SL Tetiklenen", str(toplam_sl), "#993C1D"),
+        ("Genel Başarı",  f"%{genel_oran}", "#185FA5"),
+    ]
+    m_w = fig_w / 4
+    for i, (lbl, val, col) in enumerate(metrics):
+        mx = i * m_w
+        my = fig_h - 1.35
+        rect = FancyBboxPatch((mx + 0.08, my), m_w - 0.16, 0.62,
+                               boxstyle="round,pad=0.04", linewidth=0.5,
+                               edgecolor="#DDDDDD", facecolor="#F7F7F5")
+        ax.add_patch(rect)
+        ax.text(mx + m_w/2, my + 0.47, lbl, ha="center", va="center",
+                fontsize=7.5, color="#888888")
+        ax.text(mx + m_w/2, my + 0.18, val, ha="center", va="center",
+                fontsize=13, fontweight="bold", color=col)
+
+    # Tablo başlangıç Y
+    t_top = fig_h - 1.75
+    t_left = 1.6
+
+    # Sütun başlıkları
+    ax.text(0.8, t_top + 0.3, "Parite", ha="center", va="center",
+            fontsize=8.5, fontweight="bold", color="#444444")
+    for j, tf in enumerate(tf_kullanilan):
+        x = t_left + j * col_w + col_w/2
+        ax.text(x, t_top + 0.3, tf_goster.get(tf, tf),
+                ha="center", va="center", fontsize=8.5, fontweight="bold", color="#444444")
+    ax.text(t_left + len(tf_kullanilan) * col_w + col_w/2, t_top + 0.3,
+            "Toplam", ha="center", va="center", fontsize=8.5, fontweight="bold", color="#444444")
+
+    # Ayırıcı çizgi
+    ax.axhline(t_top + 0.04, xmin=0.02, xmax=0.98, color="#CCCCCC", linewidth=0.5)
+
+    # Satırlar
+    all_rows = semboller + ["TOPLAM"]
+    for i, sym in enumerate(all_rows):
+        y = t_top - i * row_h
+        is_total = (sym == "TOPLAM")
+
+        # Satır arkaplanı
+        row_bg = "#F0F0EE" if is_total else ("#FAFAF8" if i % 2 == 0 else "#FFFFFF")
+        rect = FancyBboxPatch((0.04, y - row_h + 0.04), fig_w - 0.08, row_h - 0.06,
+                               boxstyle="round,pad=0.02", linewidth=0,
+                               facecolor=row_bg, zorder=0)
+        ax.add_patch(rect)
+
+        # Sembol etiketi
+        ax.text(0.8, y - row_h/2, sym,
+                ha="center", va="center",
+                fontsize=9 if not is_total else 9,
+                fontweight="bold" if is_total else "normal",
+                color="#1A1A1A")
+
+        # Sütunlar + TOPLAM sütunu
+        cols_data = []
+        if is_total:
+            for tf in tf_kullanilan:
+                st = toplam_satir.get(tf, {"toplam":0,"basarili":0})
+                cols_data.append(st)
+            gt_b = sum(c["basarili"] for c in cols_data)
+            gt_t = sum(c["toplam"] for c in cols_data)
+            cols_data.append({"basarili": gt_b, "toplam": gt_t})
+        else:
+            tfler = matris.get(sym, {})
+            for tf in tf_kullanilan:
+                cols_data.append(tfler.get(tf, {"toplam":0,"basarili":0}))
+            gb = sum(c["basarili"] for c in cols_data)
+            gt = sum(c["toplam"] for c in cols_data)
+            cols_data.append({"basarili": gb, "toplam": gt})
+
+        for j, st in enumerate(cols_data):
+            x = t_left + j * col_w + col_w/2
+            b, t = st["basarili"], st["toplam"]
+            p = round(b / t * 100) if t > 0 else None
+
+            cell_bg = bg_color(p) if t > 0 else "#F5F5F5"
+            cell_rect = FancyBboxPatch((x - col_w/2 + 0.06, y - row_h + 0.08),
+                                        col_w - 0.12, row_h - 0.14,
+                                        boxstyle="round,pad=0.03", linewidth=0,
+                                        facecolor=cell_bg, zorder=1)
+            ax.add_patch(cell_rect)
+
+            if t > 0:
+                ax.text(x, y - 0.20, f"%{p}",
+                        ha="center", va="center", fontsize=9, fontweight="bold",
+                        color=bar_color(p), zorder=2)
+                ax.text(x, y - 0.50, f"{b}/{t}",
+                        ha="center", va="center", fontsize=7.5, color="#666666", zorder=2)
+                # Mini bar
+                bar_w_total = col_w - 0.3
+                bar_x = x - bar_w_total/2
+                bar_y = y - row_h + 0.12
+                ax.add_patch(plt.Rectangle((bar_x, bar_y), bar_w_total, 0.08,
+                             color="#DDDDDD", zorder=2))
+                ax.add_patch(plt.Rectangle((bar_x, bar_y), bar_w_total * p/100, 0.08,
+                             color=bar_color(p), zorder=3))
+            else:
+                ax.text(x, y - row_h/2, "—",
+                        ha="center", va="center", fontsize=9, color="#BBBBBB", zorder=2)
+
+        # TOPLAM satırı üstüne çizgi
+        if is_total:
+            ax.axhline(y + 0.04, xmin=0.02, xmax=0.98, color="#AAAAAA", linewidth=0.5)
+
+    # Alt not
+    ax.text(fig_w/2, 0.12, "Başarı: en az 1 TP vurulmuş  |  Renkler: yeşil ≥%60  sarı ≥%35  kırmızı <%35",
+            ha="center", va="bottom", fontsize=7, color="#AAAAAA")
+
+    plt.tight_layout(pad=0.3)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                facecolor="#FFFFFF", edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+# ==========================================
+# GÜNLÜK ÖZET
+# ==========================================
+
+def gunluk_ozet_gonder():
+    while True:
+        try:
+            if TR_TZ:
+                simdi = datetime.now(tz=TR_TZ)
+            else:
+                simdi = datetime.utcnow()
+            hedefler = [
+                simdi.replace(hour=12, minute=0, second=0, microsecond=0),
+                simdi.replace(hour=23, minute=59, second=0, microsecond=0),
+            ]
+            gelecek = [h for h in hedefler if h > simdi]
+            if gelecek:
+                hedef = min(gelecek)
+            else:
+                import datetime as dt_mod
+                yarin = simdi + dt_mod.timedelta(days=1)
+                hedef = yarin.replace(hour=12, minute=0, second=0, microsecond=0)
+            bekle = (hedef - simdi).total_seconds()
+            print(f"[OZET] Sonraki ozet: {hedef.strftime('%H:%M')} TR ({int(bekle//60)} dk sonra)")
+            time.sleep(bekle)
+            _ozet_gonder()
+            time.sleep(70)
+        except Exception as e:
+            print(f"[OZET] Hata: {e}")
+            time.sleep(60)
+
+
+def _ozet_gonder():
+    bugun = gun_str()
+    print(f"[OZET] Istatistik ve rapor gonderiliyor. gun={bugun}")
+
+    # 1) İstatistik mesajı
+    _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, istatistik_mesaji())
+
+    # 2) Görsel rapor
+    img = rapor_gorsel(bugun)
+    if img:
+        _telegram_foto_gonder(TELEGRAM_CHAT_ID, img, f"Günlük Rapor — {bugun}")
+    else:
+        _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, rapor_mesaji(bugun))
+
+    print(f"[OZET] Gonderildi.")
+    print(f"[OZET] Gonderildi. {b['toplam']} sinyal.")
+
+    sinir = time.time() - 3 * 86400
+    with gunluk_kilit:
+        gunluk_sinyaller[:] = [s for s in gunluk_sinyaller if s["zaman"] > sinir]
+    veri_kaydet()
+
+
+# ==========================================
+# PLAIN TEXT PARSER
+# ==========================================
+
+def parse_plain(raw: str):
+    symbol, timeframe, sinyal, price = "BTCUSDT", "60", "", "?"
+    tp1, tp2, tp3, tp4, tp5, sl = None, None, None, None, None, None
+    lines = [l.strip() for l in raw.split("\n") if l.strip()]
+    for line in lines:
+        u = line.upper()
+        if re.match(r'^[A-Z0-9.]{3,15}$', line) and any(
+            x in u for x in ["USDT","BTC","ETH","BNB","SOL","XRP","DOGE","ADA","DOT","AVAX"]
+        ):
+            symbol = line
+            continue
+        if re.match(r'^\d+[\.,]?\d*$', line):
+            price = line
+            continue
+        if "1 DK" in u:      timeframe = "1"
+        elif "3 DK" in u:    timeframe = "3"
+        elif "5 DK" in u:    timeframe = "5"
+        elif "15 DK" in u:   timeframe = "15"
+        elif "30 DK" in u:   timeframe = "30"
+        elif "1 SAAT" in u:  timeframe = "60"
+        elif "2 SAAT" in u:  timeframe = "120"
+        elif "4 SAAT" in u:  timeframe = "240"
+        elif "1 GUN" in u:   timeframe = "D"
+        elif "1 HAFTA" in u: timeframe = "W"
+        if "STRONG BUY" in u or "STRONG_BUY" in u:    sinyal = "STRONG BUY"
+        elif "STRONG SELL" in u or "STRONG_SELL" in u: sinyal = "STRONG SELL"
+        elif u == "LONG":  sinyal = "LONG"
+        elif u == "SHORT": sinyal = "SHORT"
+        if line.startswith("TP1 "):   tp1 = line[4:].strip()
+        elif line.startswith("TP2 "): tp2 = line[4:].strip()
+        elif line.startswith("TP3 "): tp3 = line[4:].strip()
+        elif line.startswith("TP4 "): tp4 = line[4:].strip()
+        elif line.startswith("TP5 "): tp5 = line[4:].strip()
+        elif line.lower().startswith("cikis:"):
+            sl = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("giris:"):
+            price = line.split(":", 1)[1].strip()
+    return symbol, price, timeframe, sinyal if sinyal else "SINYAL", tp1, tp2, tp3, tp4, tp5, sl
+
+
+# ==========================================
+# WEBHOOK ENDPOINT
+# ==========================================
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    raw = request.get_data(as_text=True).strip()
+    if not raw:
+        return jsonify({"error": "Bos mesaj"}), 400
+    print(f"[RAW] {raw[:500]}")
+
+    # Telegram bot komutu mu?
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and ("message" in data or "channel_post" in data):
+            msg     = data.get("message") or data.get("channel_post")
+            text    = msg.get("text", "").strip().lower()
+            chat_id = str(msg.get("chat", {}).get("id", ""))
+            yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
+            if text.startswith("/istatistik"):
+                if chat_id in yetkili:
+                    _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
+                    print(f"[KOMUT] /istatistik islendi. chat_id={chat_id}")
+                else:
+                    print(f"[KOMUT] /istatistik yetkisiz. chat_id={chat_id} yetkili={yetkili}")
+            elif text.startswith("/rapor"):
+                if chat_id in yetkili:
+                    gun = gun_str()
+                    print(f"[KOMUT] /rapor basliyor. gun={gun} chat_id={chat_id}")
+                    img = rapor_gorsel(gun)
+                    if img:
+                        _telegram_foto_gonder(chat_id, img, f"Günlük Rapor — {gun}")
+                        print(f"[KOMUT] /rapor gorsel gonderildi.")
+                    else:
+                        _telegram_mesaj_gonder(chat_id, rapor_mesaji(gun))
+                        print(f"[KOMUT] /rapor metin gonderildi.")
+                else:
+                    print(f"[KOMUT] /rapor yetkisiz. chat_id={chat_id} yetkili={yetkili}")
+            else:
+                print(f"[KOMUT] Bilinmeyen komut: {text[:50]}")
+            return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        print(f"[KOMUT-HATA] {e}")
+
+    # Normal TradingView sinyali
+    imageurl = None
+    tp1 = tp2 = tp3 = tp4 = tp5 = sl = None
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "symbol" in data:
+            symbol    = data.get("symbol", data.get("ticker", "BTCUSDT"))
+            timeframe = str(data.get("timeframe", "60"))
+            sinyal    = data.get("signal", data.get("sinyal", "SINYAL"))
+            price     = str(data.get("price", "?"))
+            imageurl  = data.get("imageurl", None)
+            # null string olarak gelebilir, temizle
+            def _clean(v):
+                if v is None or str(v) == 'null':
+                    return None
+                return str(v)
+            tp1 = _clean(data.get("tp1"))
+            tp2 = _clean(data.get("tp2"))
+            tp3 = _clean(data.get("tp3"))
+            tp4 = _clean(data.get("tp4"))
+            tp5 = _clean(data.get("tp5"))
+            sl  = _clean(data.get("sl", data.get("cikis")))
+        else:
+            raise ValueError
+    except Exception:
+        symbol, price, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl = parse_plain(raw)
+        imageurl = None
+
+    # Duplicate önleme (30 sn)
+    simdi   = time.time()
+    anahtar = f"{symbol}_{sinyal}_{timeframe}"
+    if anahtar == son_sinyal["key"] and simdi - son_sinyal["zaman"] < 30:
+        print(f"[DUPLICATE] {anahtar} atlandi.")
+        return jsonify({"status": "duplicate"}), 200
+    son_sinyal["key"]   = anahtar
+    son_sinyal["zaman"] = simdi
+
+    print(f"[SINYAL] {symbol} {sinyal} @ {price} ({timeframe}) | TP1={tp1} TP2={tp2} TP3={tp3} SL={sl}")
+    mesaj = format_mesaj(symbol, price, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl)
+
+    t = threading.Thread(
+        target=send_telegram_and_schedule_tp,
+        args=(mesaj, symbol, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl, imageurl, price))
+    t.daemon = True
+    t.start()
+
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/health")
+def health():
+    ist = istatistik_hesapla()
+    return jsonify({
+        "status": "running",
+        "time": time.strftime("%Y-%m-%d %H:%M UTC"),
+        "toplam_sinyal": ist["toplam"],
+        "basari_oran": f"%{ist['basari_oran']}"
+    })
+
+
+# ==========================================
+# BAŞLAT
+# ==========================================
+
+print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
+dosyadan_yukle()
+threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    print(f"Sunucu baslatiliyor -> http://0.0.0.0:{port}/webhook")
+    app.run(host="0.0.0.0", port=port, debug=False)
