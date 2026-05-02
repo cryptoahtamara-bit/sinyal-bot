@@ -994,8 +994,8 @@ def webhook():
     # Telegram bot komutu mu?
     try:
         data = json.loads(raw)
-        if isinstance(data, dict) and "message" in data:
-            msg     = data["message"]
+        if isinstance(data, dict) and ("message" in data or "channel_post" in data):
+            msg     = data.get("message") or data.get("channel_post")
             text    = msg.get("text", "").strip().lower()
             chat_id = str(msg.get("chat", {}).get("id", ""))
             yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
@@ -1003,18 +1003,26 @@ def webhook():
                 if chat_id in yetkili:
                     _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
                     print(f"[KOMUT] /istatistik islendi. chat_id={chat_id}")
+                else:
+                    print(f"[KOMUT] /istatistik yetkisiz. chat_id={chat_id} yetkili={yetkili}")
             elif text.startswith("/rapor"):
                 if chat_id in yetkili:
-                    gun = gun_str()  # Türkiye saati ile bugün
+                    gun = gun_str()
+                    print(f"[KOMUT] /rapor basliyor. gun={gun} chat_id={chat_id}")
                     img = rapor_gorsel(gun)
                     if img:
                         _telegram_foto_gonder(chat_id, img, f"Günlük Rapor — {gun}")
+                        print(f"[KOMUT] /rapor gorsel gonderildi.")
                     else:
                         _telegram_mesaj_gonder(chat_id, rapor_mesaji(gun))
-                    print(f"[KOMUT] /rapor islendi. gun={gun} chat_id={chat_id}")
+                        print(f"[KOMUT] /rapor metin gonderildi.")
+                else:
+                    print(f"[KOMUT] /rapor yetkisiz. chat_id={chat_id} yetkili={yetkili}")
+            else:
+                print(f"[KOMUT] Bilinmeyen komut: {text[:50]}")
             return jsonify({"status": "ok"}), 200
-    except:
-        pass
+    except Exception as e:
+        print(f"[KOMUT-HATA] {e}")
 
     # Normal TradingView sinyali
     imageurl = None
