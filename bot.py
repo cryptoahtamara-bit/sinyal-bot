@@ -450,6 +450,7 @@ def istatistik_hesapla(gun_filtre=None):
         ]
     tp_basarili   = 0
     sl_tetiklenen = 0
+    notr          = 0
     devam_eden    = 0
     long_sayisi   = 0
     short_sayisi  = 0
@@ -467,17 +468,17 @@ def istatistik_hesapla(gun_filtre=None):
             elif s.get("sl_ok") is True:
                 sl_tetiklenen += 1
             else:
-                devam_eden += 1
+                notr += 1  # kontrol bitti, ne TP ne SL
         else:
-            devam_eden += 1
+            devam_eden += 1  # kontrol süresi henüz dolmadı
 
-    kapanan     = tp_basarili + sl_tetiklenen
-    toplam      = kapanan + devam_eden
+    kapanan     = tp_basarili + sl_tetiklenen  # nötr başarı oranına dahil değil
+    toplam      = kapanan + notr + devam_eden
     basari_oran = round(tp_basarili / kapanan * 100, 1) if kapanan > 0 else 0
     return {
         "toplam": toplam, "long": long_sayisi, "short": short_sayisi,
         "tp_basarili": tp_basarili, "sl_tetiklenen": sl_tetiklenen,
-        "devam_eden": devam_eden, "kapanan": kapanan, "basari_oran": basari_oran
+        "notr": notr, "devam_eden": devam_eden, "kapanan": kapanan, "basari_oran": basari_oran
     }
 
 
@@ -527,6 +528,7 @@ def istatistik_mesaji():
         f"📨 Toplam Sinyal: <b>{b['toplam']}</b>  (🚀 {b['long']} Long | 📉 {b['short']} Short)\n"
         f"✅ TP Başarılı: <b>{b['tp_basarili']}</b>\n"
         f"⛔ SL Tetiklenen: <b>{b['sl_tetiklenen']}</b>\n"
+        f"⚪ Nötr: <b>{b['notr']}</b>\n"
         f"⏳ Devam Eden: <b>{b['devam_eden']}</b>\n"
         f"🏆 Başarı Oranı: <b>%{b['basari_oran']}</b> ({b['tp_basarili']}/{b['kapanan']})\n"
     )
@@ -539,6 +541,7 @@ def istatistik_mesaji():
         f"📨 Toplam Sinyal: <b>{t['toplam']}</b>  (🚀 {t['long']} Long | 📉 {t['short']} Short)\n"
         f"✅ TP Başarılı: <b>{t['tp_basarili']}</b>\n"
         f"⛔ SL Tetiklenen: <b>{t['sl_tetiklenen']}</b>\n"
+        f"⚪ Nötr: <b>{t['notr']}</b>\n"
         f"🏆 Başarı Oranı: <b>%{t['basari_oran']}</b> ({t['tp_basarili']}/{t['kapanan']})"
     )
     return mesaj
@@ -580,23 +583,27 @@ def rapor_hesapla(gun: str):
         if grup not in matris:
             matris[grup] = {}
         if tf not in matris[grup]:
-            matris[grup][tf] = {"toplam":0,"basarili":0,"devam":0}
+            matris[grup][tf] = {"toplam":0,"basarili":0,"devam":0,"notr":0}
         matris[grup][tf]["toplam"] += 1
-        if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
-            matris[grup][tf]["basarili"] += 1
         kontrol_yapildi = any(s.get(k) is not None for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"])
-        if not kontrol_yapildi:
+        if kontrol_yapildi:
+            if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
+                matris[grup][tf]["basarili"] += 1
+            elif not s.get("sl_ok"):
+                matris[grup][tf]["notr"] += 1
+        else:
             matris[grup][tf]["devam"] += 1
 
     tf_kullanilan = [tf for tf in tf_siralama if tf in tf_set]
 
-    toplam_satir = {tf: {"toplam":0,"basarili":0,"devam":0} for tf in tf_kullanilan}
+    toplam_satir = {tf: {"toplam":0,"basarili":0,"devam":0,"notr":0} for tf in tf_kullanilan}
     for grup, tfler in matris.items():
         for tf, st in tfler.items():
             if tf in toplam_satir:
                 toplam_satir[tf]["toplam"]   += st["toplam"]
                 toplam_satir[tf]["basarili"] += st["basarili"]
                 toplam_satir[tf]["devam"]    += st["devam"]
+                toplam_satir[tf]["notr"]     += st["notr"]
 
     return matris, toplam_satir, tf_kullanilan, tf_goster, kayitlar
 
@@ -753,23 +760,25 @@ def rapor_gorsel(gun: str):
             ha="center", va="top", fontsize=10, color=HDR_COL)
 
     # 5 Metrik kart
+    notr_sayi = b.get("notr", 0)
     metrics = [
         ("Toplam Sinyal", str(toplam_sinyal),  TEXT_W),
         ("TP Başarılı",   str(tp_basarili),    "#5DC98A"),
         ("SL Tetiklenen", str(sl_tetiklenen),  "#E05C5C"),
+        ("Nötr",          str(notr_sayi),       "#888780"),
         ("Devam Eden",    str(devam_eden),      "#E8A835"),
-        ("Genel Başarı",  f"%{genel_oran}",    "#5B9CF6"),
+        ("Başarı",        f"%{genel_oran}",    "#5B9CF6"),
     ]
-    m_w = fig_w / 5
+    m_w = fig_w / 6
     for i, (lbl, val, col) in enumerate(metrics):
         mx = i * m_w
         my = fig_h - 1.48
-        ax.add_patch(FancyBboxPatch((mx + 0.06, my), m_w - 0.12, 0.70,
+        ax.add_patch(FancyBboxPatch((mx + 0.05, my), m_w - 0.10, 0.70,
                                      boxstyle="round,pad=0.04", linewidth=0, facecolor=CARD_BG))
         ax.text(mx + m_w/2, my + 0.54, lbl, ha="center", va="center",
-                fontsize=6.5, color=HDR_COL)
+                fontsize=6.0, color=HDR_COL)
         ax.text(mx + m_w/2, my + 0.22, val, ha="center", va="center",
-                fontsize=13, fontweight="bold", color=col)
+                fontsize=12, fontweight="bold", color=col)
 
     # Tablo
     t_top  = fig_h - 1.92
@@ -806,16 +815,18 @@ def rapor_gorsel(gun: str):
                 cols_data.append(st)
             gt_b   = sum(c["basarili"] for c in cols_data)
             gt_t   = sum(c["toplam"]   for c in cols_data)
-            gt_dev = sum(c["devam"]    for c in cols_data)
-            cols_data.append({"basarili": gt_b, "toplam": gt_t, "devam": gt_dev})
+            gt_dev = sum(c.get("devam",0) for c in cols_data)
+            gt_ntr = sum(c.get("notr",0)  for c in cols_data)
+            cols_data.append({"basarili": gt_b, "toplam": gt_t, "devam": gt_dev, "notr": gt_ntr})
         else:
             tfler = matris.get(sym, {})
             for tf in tf_kullanilan:
-                cols_data.append(tfler.get(tf, {"toplam":0,"basarili":0,"devam":0}))
-            gb   = sum(c["basarili"] for c in cols_data)
-            gt   = sum(c["toplam"]   for c in cols_data)
-            gdev = sum(c["devam"]    for c in cols_data)
-            cols_data.append({"basarili": gb, "toplam": gt, "devam": gdev})
+                cols_data.append(tfler.get(tf, {"toplam":0,"basarili":0,"devam":0,"notr":0}))
+            gb   = sum(c["basarili"]    for c in cols_data)
+            gt   = sum(c["toplam"]      for c in cols_data)
+            gdev = sum(c.get("devam",0) for c in cols_data)
+            gntr = sum(c.get("notr",0)  for c in cols_data)
+            cols_data.append({"basarili": gb, "toplam": gt, "devam": gdev, "notr": gntr})
 
         for j, st in enumerate(cols_data):
             x = t_left + j * col_w + col_w/2
@@ -829,31 +840,43 @@ def rapor_gorsel(gun: str):
                                          boxstyle="round,pad=0.03", linewidth=0,
                                          facecolor=cell_bg(p if p is not None else 0, t_v), zorder=1))
 
+            notr_v = st.get("notr", 0)
             if t_v > 0:
-                ax.text(x, y - 0.18, f"%{p}", ha="center", va="center",
+                ax.text(x, y - 0.16, f"%{p}", ha="center", va="center",
                         fontsize=9, fontweight="bold", color=bar_col(p), zorder=2)
-                ax.text(x, y - 0.44, f"{b_v}/{t_v}", ha="center", va="center",
+                ax.text(x, y - 0.38, f"{b_v}/{t_v}", ha="center", va="center",
                         fontsize=7.5, color=TEXT_W, zorder=2)
+                extra_y = 0.58
+                if notr_v > 0:
+                    ax.text(x, y - extra_y, f"~{notr_v} nötr", ha="center", va="center",
+                            fontsize=6.0, color="#888780", zorder=2)
+                    extra_y += 0.16
                 if dev > 0:
-                    ax.text(x, y - 0.66, f"+{dev} devam", ha="center", va="center",
-                            fontsize=6.5, color="#E8A835", zorder=2)
+                    ax.text(x, y - extra_y, f"+{dev} devam", ha="center", va="center",
+                            fontsize=6.0, color="#E8A835", zorder=2)
                 # Mini bar
                 bw = col_w - 0.36
                 bx = x - bw/2
                 by = y - row_h + 0.13
                 ax.add_patch(plt.Rectangle((bx, by), bw, 0.07, color=BAR_TRACK, zorder=2))
                 ax.add_patch(plt.Rectangle((bx, by), bw * p/100, 0.07, color=bar_col(p), zorder=3))
-            elif dev > 0:
-                ax.text(x, y - row_h/2, f"+{dev} devam", ha="center", va="center",
-                        fontsize=7, color="#E8A835", zorder=2)
             else:
-                ax.text(x, y - row_h/2, "—", ha="center", va="center",
-                        fontsize=9, color="#3A3F4A", zorder=2)
+                extra_y = row_h/2 + 0.12
+                if notr_v > 0:
+                    ax.text(x, y - extra_y + 0.12, f"~{notr_v} nötr", ha="center", va="center",
+                            fontsize=7, color="#888780", zorder=2)
+                    extra_y -= 0.12
+                if dev > 0:
+                    ax.text(x, y - extra_y, f"+{dev} devam", ha="center", va="center",
+                            fontsize=7, color="#E8A835", zorder=2)
+                elif notr_v == 0:
+                    ax.text(x, y - row_h/2, "—", ha="center", va="center",
+                            fontsize=9, color="#3A3F4A", zorder=2)
 
         if is_total:
             ax.axhline(y + 0.05, xmin=0.02, xmax=0.98, color="#333740", linewidth=0.8)
 
-    ax.text(fig_w/2, 0.10, "Başarı: en az 1 TP vurulmuş  |  yeşil ≥%60  sarı ≥%35  kırmızı <%35",
+    ax.text(fig_w/2, 0.10, "Başarı: en az 1 TP vurulmuş  |  yeşil ≥%60  sarı ≥%35  kırmızı <%35  |  ~N nötr  +N devam",
             ha="center", va="bottom", fontsize=6.5, color="#3A3F4A")
 
     plt.tight_layout(pad=0.3)
