@@ -580,19 +580,23 @@ def rapor_hesapla(gun: str):
         if grup not in matris:
             matris[grup] = {}
         if tf not in matris[grup]:
-            matris[grup][tf] = {"toplam":0,"basarili":0}
+            matris[grup][tf] = {"toplam":0,"basarili":0,"devam":0}
         matris[grup][tf]["toplam"] += 1
         if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
             matris[grup][tf]["basarili"] += 1
+        kontrol_yapildi = any(s.get(k) is not None for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"])
+        if not kontrol_yapildi:
+            matris[grup][tf]["devam"] += 1
 
     tf_kullanilan = [tf for tf in tf_siralama if tf in tf_set]
 
-    toplam_satir = {tf: {"toplam":0,"basarili":0} for tf in tf_kullanilan}
+    toplam_satir = {tf: {"toplam":0,"basarili":0,"devam":0} for tf in tf_kullanilan}
     for grup, tfler in matris.items():
         for tf, st in tfler.items():
             if tf in toplam_satir:
                 toplam_satir[tf]["toplam"]   += st["toplam"]
                 toplam_satir[tf]["basarili"] += st["basarili"]
+                toplam_satir[tf]["devam"]    += st["devam"]
 
     return matris, toplam_satir, tf_kullanilan, tf_goster, kayitlar
 
@@ -683,7 +687,7 @@ def rapor_mesaji(gun: str) -> str:
 
 
 def rapor_gorsel(gun: str):
-    """Raporu koyu tema PNG olarak üretir, bytes döndürür."""
+    """Raporu koyu tema PNG olarak üretir — 5 kart + devam eden hücrelerde."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -697,30 +701,29 @@ def rapor_gorsel(gun: str):
     if not kayitlar:
         return None
 
-    # Renk paleti — koyu tema
+    # Koyu tema renkleri
     BG        = "#13151A"
     CARD_BG   = "#1C1F28"
-    ROW_BG1   = "#1C1F28"
-    ROW_BG2   = "#16181F"
+    ROW_ODD   = "#1A1D24"
+    ROW_EVEN  = "#16181F"
     TOTAL_BG  = "#22262F"
     HDR_COL   = "#6B6F7A"
     TEXT_W    = "#E8E8E6"
-    TEXT_MUT  = "#6B6F7A"
     BAR_TRACK = "#22262F"
 
-    def bar_color(p):
+    def bar_col(p):
         if p is None: return "#3A3F4A"
         if p >= 60:   return "#5DC98A"
         if p >= 35:   return "#E8A835"
         return "#E05C5C"
 
-    def cell_bg(p):
-        if p is None: return ROW_BG1
-        if p >= 60:   return "#1A2E1E"
-        if p >= 35:   return "#2A2210"
+    def cell_bg(p, t):
+        if t == 0: return ROW_ODD
+        if p >= 60: return "#1A2E1E"
+        if p >= 35: return "#2A2210"
         return "#2A1212"
 
-    # --- istatistik hesapla ---
+    # İstatistik
     b = istatistik_hesapla(gun_filtre=gun)
     tp_basarili   = b["tp_basarili"]
     sl_tetiklenen = b["sl_tetiklenen"]
@@ -732,10 +735,10 @@ def rapor_gorsel(gun: str):
     n_sym = len(semboller) + 1
     n_tf  = len(tf_kullanilan) + 1
 
-    col_w = 1.5
-    row_h = 0.9
+    col_w = 1.55
+    row_h = 1.0   # devam satırı için biraz daha yüksek
     fig_w = 2.0 + n_tf * col_w
-    fig_h = 3.6 + n_sym * row_h
+    fig_h = 3.8 + n_sym * row_h
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.set_xlim(0, fig_w)
@@ -749,7 +752,7 @@ def rapor_gorsel(gun: str):
     ax.text(fig_w/2, fig_h - 0.52, gun,
             ha="center", va="top", fontsize=10, color=HDR_COL)
 
-    # Metrik kartlar: Toplam | TP Başarılı | SL | Devam Eden | Genel Başarı
+    # 5 Metrik kart
     metrics = [
         ("Toplam Sinyal", str(toplam_sinyal),  TEXT_W),
         ("TP Başarılı",   str(tp_basarili),    "#5DC98A"),
@@ -760,40 +763,37 @@ def rapor_gorsel(gun: str):
     m_w = fig_w / 5
     for i, (lbl, val, col) in enumerate(metrics):
         mx = i * m_w
-        my = fig_h - 1.45
-        rect = FancyBboxPatch((mx + 0.06, my), m_w - 0.12, 0.68,
-                               boxstyle="round,pad=0.04", linewidth=0,
-                               facecolor=CARD_BG)
-        ax.add_patch(rect)
-        ax.text(mx + m_w/2, my + 0.52, lbl, ha="center", va="center",
+        my = fig_h - 1.48
+        ax.add_patch(FancyBboxPatch((mx + 0.06, my), m_w - 0.12, 0.70,
+                                     boxstyle="round,pad=0.04", linewidth=0, facecolor=CARD_BG))
+        ax.text(mx + m_w/2, my + 0.54, lbl, ha="center", va="center",
                 fontsize=6.5, color=HDR_COL)
         ax.text(mx + m_w/2, my + 0.22, val, ha="center", va="center",
                 fontsize=13, fontweight="bold", color=col)
 
     # Tablo
-    t_top  = fig_h - 1.88
+    t_top  = fig_h - 1.92
     t_left = 1.55
 
-    # Sütun başlıkları
-    ax.text(0.78, t_top + 0.32, "Parite", ha="center", va="center",
+    # Başlıklar
+    ax.text(0.78, t_top + 0.34, "Parite", ha="center", va="center",
             fontsize=8, fontweight="bold", color=HDR_COL)
     for j, tf in enumerate(tf_kullanilan):
         x = t_left + j * col_w + col_w/2
-        ax.text(x, t_top + 0.32, tf_goster.get(tf, tf),
+        ax.text(x, t_top + 0.34, tf_goster.get(tf, tf),
                 ha="center", va="center", fontsize=8, fontweight="bold", color=HDR_COL)
-    ax.text(t_left + len(tf_kullanilan) * col_w + col_w/2, t_top + 0.32,
+    ax.text(t_left + len(tf_kullanilan) * col_w + col_w/2, t_top + 0.34,
             "Toplam", ha="center", va="center", fontsize=8, fontweight="bold", color=HDR_COL)
-    ax.axhline(t_top + 0.05, xmin=0.02, xmax=0.98, color="#22262F", linewidth=0.8)
+    ax.axhline(t_top + 0.06, xmin=0.02, xmax=0.98, color="#22262F", linewidth=0.8)
 
     all_rows = semboller + ["TOPLAM"]
     for i, sym in enumerate(all_rows):
         y = t_top - i * row_h
         is_total = (sym == "TOPLAM")
+        row_bg = TOTAL_BG if is_total else (ROW_ODD if i % 2 == 0 else ROW_EVEN)
 
-        row_bg = TOTAL_BG if is_total else (ROW_BG1 if i % 2 == 0 else ROW_BG2)
         ax.add_patch(FancyBboxPatch((0.03, y - row_h + 0.04), fig_w - 0.06, row_h - 0.06,
-                                     boxstyle="round,pad=0.02", linewidth=0,
-                                     facecolor=row_bg, zorder=0))
+                                     boxstyle="round,pad=0.02", linewidth=0, facecolor=row_bg, zorder=0))
 
         ax.text(0.78, y - row_h/2, sym, ha="center", va="center",
                 fontsize=9, fontweight="bold" if is_total else "normal",
@@ -802,38 +802,50 @@ def rapor_gorsel(gun: str):
         cols_data = []
         if is_total:
             for tf in tf_kullanilan:
-                st = toplam_satir.get(tf, {"toplam":0,"basarili":0})
+                st = toplam_satir.get(tf, {"toplam":0,"basarili":0,"devam":0})
                 cols_data.append(st)
-            gt_b = sum(c["basarili"] for c in cols_data)
-            gt_t = sum(c["toplam"] for c in cols_data)
-            cols_data.append({"basarili": gt_b, "toplam": gt_t})
+            gt_b   = sum(c["basarili"] for c in cols_data)
+            gt_t   = sum(c["toplam"]   for c in cols_data)
+            gt_dev = sum(c["devam"]    for c in cols_data)
+            cols_data.append({"basarili": gt_b, "toplam": gt_t, "devam": gt_dev})
         else:
             tfler = matris.get(sym, {})
             for tf in tf_kullanilan:
-                cols_data.append(tfler.get(tf, {"toplam":0,"basarili":0}))
-            gb = sum(c["basarili"] for c in cols_data)
-            gt = sum(c["toplam"] for c in cols_data)
-            cols_data.append({"basarili": gb, "toplam": gt})
+                cols_data.append(tfler.get(tf, {"toplam":0,"basarili":0,"devam":0}))
+            gb   = sum(c["basarili"] for c in cols_data)
+            gt   = sum(c["toplam"]   for c in cols_data)
+            gdev = sum(c["devam"]    for c in cols_data)
+            cols_data.append({"basarili": gb, "toplam": gt, "devam": gdev})
 
         for j, st in enumerate(cols_data):
             x = t_left + j * col_w + col_w/2
-            b_v, t_v = st["basarili"], st["toplam"]
-            p = round(b_v / t_v * 100) if t_v > 0 else None
+            b_v = st["basarili"]
+            t_v = st["toplam"]
+            dev = st.get("devam", 0)
+            p   = round(b_v / t_v * 100) if t_v > 0 else None
 
             ax.add_patch(FancyBboxPatch((x - col_w/2 + 0.07, y - row_h + 0.09),
                                          col_w - 0.14, row_h - 0.16,
                                          boxstyle="round,pad=0.03", linewidth=0,
-                                         facecolor=cell_bg(p), zorder=1))
+                                         facecolor=cell_bg(p if p is not None else 0, t_v), zorder=1))
+
             if t_v > 0:
-                ax.text(x, y - 0.22, f"%{p}", ha="center", va="center",
-                        fontsize=9, fontweight="bold", color=bar_color(p), zorder=2)
-                ax.text(x, y - 0.53, f"{b_v}/{t_v}", ha="center", va="center",
+                ax.text(x, y - 0.18, f"%{p}", ha="center", va="center",
+                        fontsize=9, fontweight="bold", color=bar_col(p), zorder=2)
+                ax.text(x, y - 0.44, f"{b_v}/{t_v}", ha="center", va="center",
                         fontsize=7.5, color=TEXT_W, zorder=2)
-                bw = col_w - 0.34
+                if dev > 0:
+                    ax.text(x, y - 0.66, f"+{dev} devam", ha="center", va="center",
+                            fontsize=6.5, color="#E8A835", zorder=2)
+                # Mini bar
+                bw = col_w - 0.36
                 bx = x - bw/2
                 by = y - row_h + 0.13
-                ax.add_patch(plt.Rectangle((bx, by), bw, 0.08, color=BAR_TRACK, zorder=2))
-                ax.add_patch(plt.Rectangle((bx, by), bw * p/100, 0.08, color=bar_color(p), zorder=3))
+                ax.add_patch(plt.Rectangle((bx, by), bw, 0.07, color=BAR_TRACK, zorder=2))
+                ax.add_patch(plt.Rectangle((bx, by), bw * p/100, 0.07, color=bar_col(p), zorder=3))
+            elif dev > 0:
+                ax.text(x, y - row_h/2, f"+{dev} devam", ha="center", va="center",
+                        fontsize=7, color="#E8A835", zorder=2)
             else:
                 ax.text(x, y - row_h/2, "—", ha="center", va="center",
                         fontsize=9, color="#3A3F4A", zorder=2)
