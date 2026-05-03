@@ -1268,27 +1268,42 @@ def _tarayici_veri_cek():
     return []
 
 def _tarayici_mesaj(yukselenler, dusenler, zaman_str):
-    ayrac = "─" * 20
-    satirlar = [
-        "❗ " + KANAL_ADI + " ❗",
-        "",
-        "📊 MEXC Futures — Saatlik Tarama",
-        "🕐 " + zaman_str,
-        ayrac,
-        "🚀 En Çok Yükselenler",
-        "",
-    ]
-    for i, item in enumerate(yukselenler, 1):
-        satirlar.append(f"{i}. {item['sym']:<10} +{item['pct']:.2f}%   ${item['fiyat']}")
-    satirlar += ["", ayrac, "📉 En Çok Düşenler", ""]
-    for i, item in enumerate(dusenler, 1):
-        satirlar.append(f"{i}. {item['sym']:<10} -{abs(item['pct']):.2f}%   ${item['fiyat']}")
-    satirlar += [
-        ayrac,
-        "Siz de kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin.",
-        "İletişim: " + KANAL_TAG,
-    ]
-    return "\n".join(satirlar)
+    ayrac = "─" * 28
+
+    def yuksel_satir(i, item):
+        sym  = item["sym"][:10].ljust(10)
+        pct  = f"+{item['pct']:.2f}%".rjust(9)
+        fiyat = ("💰 $" + item["fiyat"]).ljust(18)
+        return f"🟢 {i}. {sym} {pct}   {fiyat}"
+
+    def dusen_satir(i, item):
+        sym  = item["sym"][:10].ljust(10)
+        pct  = f"-{abs(item['pct']):.2f}%".rjust(9)
+        fiyat = ("💰 $" + item["fiyat"]).ljust(18)
+        return f"🔴 {i}. {sym} {pct}   {fiyat}"
+
+    baslik = "❗ " + KANAL_ADI + " ❗"
+    alt_baslik = "📊 MEXC Futures — Saatlik Tarama"
+    zaman_satir = "🕐 " + zaman_str
+
+    yuksel_satirlar = [yuksel_satir(i, item) for i, item in enumerate(yukselenler, 1)]
+    dusen_satirlar  = [dusen_satir(i, item)  for i, item in enumerate(dusenler, 1)]
+
+    msg = (
+        baslik + "\n\n"
+        + alt_baslik + "\n"
+        + zaman_satir + "\n"
+        + ayrac + "\n\n"
+        + "🚀 <b>En Çok Yükselenler</b>\n"
+        + "<pre>" + "\n".join(yuksel_satirlar) + "</pre>\n"
+        + ayrac + "\n\n"
+        + "📉 <b>En Çok Düşenler</b>\n"
+        + "<pre>" + "\n".join(dusen_satirlar) + "</pre>\n"
+        + ayrac + "\n"
+        + "Siz de kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin.\n"
+        + "İletişim: " + KANAL_TAG
+    )
+    return msg
 
 def _tarayici_gonder():
     tickers = _tarayici_veri_cek()
