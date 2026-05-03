@@ -281,7 +281,7 @@ def get_high_low_in_period(symbol: str, start_ts: int, end_ts: int):
 # TP + SL KONTROL
 # ==========================================
 
-def tp_kontrol_gonder(symbol, sinyal, tp1, tp2, tp3, tp4, tp5, sl,
+def tp_kontrol_gonder(symbol, sinyal, timeframe, tp1, tp2, tp3, tp4, tp5, sl,
                       message_id, dakika, sinyal_ts, sinyal_fiyat=None):
     is_long  = any(x in sinyal.upper() for x in ["BUY", "LONG"])
     is_short = any(x in sinyal.upper() for x in ["SELL", "SHORT"])
@@ -434,7 +434,7 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal,
         kontrol_dk = tp_sure(timeframe)
         t = threading.Thread(
             target=tp_kontrol_gonder,
-            args=(symbol, sinyal, tp1, tp2, tp3, tp4, tp5, sl,
+            args=(symbol, sinyal, timeframe, tp1, tp2, tp3, tp4, tp5, sl,
                   message_id, kontrol_dk, sinyal_ts, price))
         t.daemon = True
         t.start()
