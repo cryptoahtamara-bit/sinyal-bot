@@ -2,7 +2,7 @@ import os, time, json, re, threading, requests
 from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
- 
+
 try:
     import pytz
     TR_TZ = pytz.timezone("Europe/Istanbul")
@@ -1223,7 +1223,9 @@ def _whale_kontrol():
             for sym in WHALE_SYMBOLS:
                 deals = _whale_fetch(sym)
                 if not deals:
+                    print(f"[WHALE] {sym}: veri yok")
                     continue
+                print(f"[WHALE] {sym}: {len(deals)} islem geldi")
 
                 son_ts = _whale_last_ts.get(sym, 0)
                 yeni_islemler = [d for d in deals if d.get("time", 0) > son_ts]
