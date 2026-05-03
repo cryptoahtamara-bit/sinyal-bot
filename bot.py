@@ -1006,6 +1006,45 @@ def webhook():
                         print(f"[KOMUT] /rapor metin gonderildi.")
                 else:
                     print(f"[KOMUT] /rapor yetkisiz. chat_id={chat_id} yetkili={yetkili}")
+            elif text.startswith("/tarayici"):
+                if chat_id in yetkili:
+                    print(f"[KOMUT] /tarayici islendi. chat_id={chat_id}")
+                    threading.Thread(target=_tarayici_gonder, daemon=True).start()
+                else:
+                    print(f"[KOMUT] /tarayici yetkisiz. chat_id={chat_id}")
+            elif text.startswith("/balina"):
+                if chat_id in yetkili:
+                    print(f"[KOMUT] /balina islendi. chat_id={chat_id}")
+                    def _balina_manuel(cid):
+                        bulunan = False
+                        for sym in WHALE_SYMBOLS:
+                            deals = _whale_fetch(sym)
+                            if not deals:
+                                continue
+                            for deal in deals[:50]:
+                                fiyat  = float(deal.get("p", 0))
+                                miktar = float(deal.get("v", 0))
+                                tutar  = fiyat * miktar
+                                if tutar >= WHALE_LIMIT_USD:
+                                    ts_ms     = deal.get("time", 0)
+                                    taraf     = deal.get("T", 1)
+                                    yon       = "ALIM" if taraf == 1 else "SATIM"
+                                    zaman_str = _whale_fmt_zaman(ts_ms)
+                                    mesaj     = _whale_mesaj(sym, yon, tutar, miktar, fiyat, zaman_str)
+                                    _telegram_mesaj_gonder(cid, mesaj)
+                                    bulunan = True
+                                    break
+                            if bulunan:
+                                break
+                        if not bulunan:
+                            _telegram_mesaj_gonder(cid,
+                                "🐋 Balina izleme aktif.\n"
+                                f"Limit: ${WHALE_LIMIT_USD:,.0f}\n"
+                                "Son işlemlerde eşiği aşan hareket bulunamadı."
+                            )
+                    threading.Thread(target=_balina_manuel, args=(chat_id,), daemon=True).start()
+                else:
+                    print(f"[KOMUT] /balina yetkisiz. chat_id={chat_id}")
             else:
                 print(f"[KOMUT] Bilinmeyen komut: {text[:50]}")
             return jsonify({"status": "ok"}), 200
@@ -1192,6 +1231,117 @@ def _whale_kontrol():
 
         time.sleep(WHALE_POLL_SEC)
 
+
+# ==========================================
+# FUTURES TARAYICI — EN ÇOK YÜKSELEN/DÜŞEN
+# ==========================================
+
+TARAYICI_TOP_N = 5
+
+def _tarayici_veri_cek():
+    """MEXC Futures tüm paritelerin 24s ticker verisi."""
+    try:
+        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("success") and data.get("data"):
+                return data["data"]
+    except Exception as e:
+        print(f"[TARAYICI] Veri cekme hatasi: {e}")
+    return []
+
+def _tarayici_mesaj(yukselenler, dusenler, zaman_str):
+    kanal_baslik = "❗ " + KANAL_ADI + " ❗"
+    baslik_yuksel = "🚀 En Çok Yükselenler — MEXC Futures"
+    baslik_dusen  = "📉 En Çok Düşenler — MEXC Futures"
+
+    msg  = kanal_baslik + "\n\n"
+    msg += baslik_yuksel + "\n"
+    for i, item in enumerate(yukselenler, 1):
+        msg += f"{i}. {item['sym']} +{item['pct']:.2f}% · ${item['fiyat']}\n"
+
+    msg += "\n"
+    msg += baslik_dusen + "\n"
+    for i, item in enumerate(dusenler, 1):
+        msg += f"{i}. {item['sym']} -{abs(item['pct']):.2f}% · ${item['fiyat']}\n"
+
+    msg += "\n🕐 " + zaman_str
+    msg += "\n\nSiz de kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin.\nİletişim: " + KANAL_TAG
+    return msg
+
+def _tarayici_gonder():
+    tickers = _tarayici_veri_cek()
+    if not tickers:
+        print("[TARAYICI] Veri alinamadi.")
+        return
+
+    liste = []
+    for t in tickers:
+        try:
+            sym = t.get("symbol", "")
+            if not sym.endswith("_USDT"):
+                continue
+            pct  = float(t.get("riseFallRate", 0)) * 100
+            last = float(t.get("lastPrice", 0))
+            if last <= 0:
+                continue
+            # Fiyat formatla
+            if last >= 1000:
+                fiyat_str = f"{last:,.1f}"
+            elif last >= 1:
+                fiyat_str = f"{last:,.3f}"
+            else:
+                fiyat_str = f"{last:.6f}"
+            liste.append({
+                "sym": sym.replace("_USDT", ""),
+                "pct": pct,
+                "fiyat": fiyat_str
+            })
+        except:
+            continue
+
+    if not liste:
+        print("[TARAYICI] İşlenecek veri yok.")
+        return
+
+    yukselenler = sorted(liste, key=lambda x: x["pct"], reverse=True)[:TARAYICI_TOP_N]
+    dusenler    = sorted(liste, key=lambda x: x["pct"])[:TARAYICI_TOP_N]
+
+    if TR_TZ:
+        zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
+    else:
+        zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
+
+    mesaj = _tarayici_mesaj(yukselenler, dusenler, zaman_str)
+    _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
+    print(f"[TARAYICI] Gonderildi. Top {TARAYICI_TOP_N} yukselenler/dusenler.")
+
+    if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
+        _telegram_mesaj_gonder(TELEGRAM_LOG_ID, mesaj)
+
+def _tarayici_zamanlayici():
+    """Her saat başında tarayıcı çalıştır."""
+    import datetime as dt_mod
+
+    print("[TARAYICI] Zamanlayici basladi.")
+    while True:
+        try:
+            if TR_TZ:
+                simdi = datetime.now(tz=TR_TZ)
+            else:
+                simdi = datetime.utcnow()
+
+            # Bir sonraki saat başını hesapla
+            sonraki = simdi.replace(minute=0, second=0, microsecond=0) + dt_mod.timedelta(hours=1)
+            bekle = (sonraki - simdi).total_seconds()
+            print(f"[TARAYICI] Sonraki rapor: {sonraki.strftime('%H:%M')} ({int(bekle//60)} dk sonra)")
+            time.sleep(bekle)
+            _tarayici_gonder()
+            time.sleep(5)  # double-fire önleme
+        except Exception as e:
+            print(f"[TARAYICI] Zamanlayici hata: {e}")
+            time.sleep(60)
+
 # ==========================================
 # BAŞLAT
 # ==========================================
@@ -1200,6 +1350,7 @@ print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
 threading.Thread(target=_whale_kontrol, daemon=True).start()
+threading.Thread(target=_tarayici_zamanlayici, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
