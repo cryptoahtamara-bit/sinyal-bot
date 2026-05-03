@@ -1183,16 +1183,30 @@ def _whale_mesaj(symbol, yon, tutar_usd, miktar, fiyat, zaman_str):
     return "\n".join(satirlar)
 
 def _whale_fetch(symbol):
-    """MEXC Futures son işlemlerini çek."""
-    url = f"https://contract.mexc.com/api/v1/contract/deals/{symbol}"
+    """MEXC Futures büyük işlemleri çek (bigdeal endpoint)."""
+    # Önce bigdeal endpoint'ini dene
+    url = f"https://contract.mexc.com/api/v1/contract/deal/bigdeal/{symbol}"
     try:
         r = requests.get(url, timeout=8)
         if r.status_code == 200:
             data = r.json()
             if data.get("success") and data.get("data"):
+                deals = data["data"]
+                print(f"[WHALE] bigdeal {symbol}: {len(deals)} işlem")
+                return deals
+    except Exception as e:
+        print(f"[WHALE] bigdeal hata ({symbol}): {e}")
+
+    # Fallback: normal deals endpoint
+    url2 = f"https://contract.mexc.com/api/v1/contract/deals/{symbol}"
+    try:
+        r = requests.get(url2, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("success") and data.get("data"):
                 return data["data"]
     except Exception as e:
-        print(f"[WHALE] Fetch hata ({symbol}): {e}")
+        print(f"[WHALE] deals hata ({symbol}): {e}")
     return []
 
 def _whale_kontrol():
