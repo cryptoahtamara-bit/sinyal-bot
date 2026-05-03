@@ -1124,12 +1124,23 @@ WHALE_POLL_SEC    = 3    # kaç saniyede bir kontrol et
 _whale_last_ts    = {}   # son gönderilen işlem timestamp'i per symbol
 
 def _whale_fmt_zaman(ts_ms):
-    ts = ts_ms / 1000
-    if TR_TZ:
-        dt = datetime.fromtimestamp(ts, tz=TR_TZ)
-    else:
-        dt = datetime.utcfromtimestamp(ts)
-    return dt.strftime("%d %b %Y %H:%M:%S")
+    # MEXC bazen saniye bazen milisaniye döndürür
+    # 1e10'dan büyükse milisaniye, değilse saniye
+    ts = ts_ms / 1000 if ts_ms > 1e10 else ts_ms
+    if ts <= 0:
+        if TR_TZ:
+            return datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M:%S")
+        return datetime.utcnow().strftime("%d %b %Y %H:%M:%S UTC")
+    try:
+        if TR_TZ:
+            dt = datetime.fromtimestamp(ts, tz=TR_TZ)
+        else:
+            dt = datetime.utcfromtimestamp(ts)
+        return dt.strftime("%d %b %Y %H:%M:%S")
+    except:
+        if TR_TZ:
+            return datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M:%S")
+        return datetime.utcnow().strftime("%d %b %Y %H:%M:%S UTC")
 
 def _whale_fmt_tutar(usd):
     if usd >= 1_000_000:
@@ -1151,18 +1162,24 @@ def _whale_mesaj(symbol, yon, tutar_usd, miktar, fiyat, zaman_str):
     yon_emoji = "🟢" if yon == "ALIM" else "🔴"
     yon_str   = "BÜYÜK ALIM" if yon == "ALIM" else "BÜYÜK SATIM"
     sembol_goster = symbol.replace("_", "") + ".P"
-    return (
-        "❗ " + KANAL_ADI + " ❗\n\n"
-        "🐋 BTC ve ETH Balina Hareketliliği\n\n"
-        "⚡ Parite: " + sembol_goster + "\n"
-        + yon_emoji + " Yön: " + yon_str + "\n"
-        "💰 Tutar: " + _whale_fmt_tutar(tutar_usd) + "\n"
-        "📦 Miktar: " + _whale_fmt_miktar(miktar, symbol) + "\n"
-        "📌 Fiyat: " + _whale_fmt_fiyat(fiyat, symbol) + "\n"
-        "🕐 Zaman: " + zaman_str + "\n\n"
-        "Siz de kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin.\n"
-        "İletişim: " + KANAL_TAG
-    )
+    ayrac = "─" * 20
+    satirlar = [
+        "❗ " + KANAL_ADI + " ❗",
+        "",
+        "🐋 BTC ve ETH Balina Hareketliliği",
+        ayrac,
+        "⚡ " + sembol_goster,
+        yon_emoji + " " + yon_str,
+        "",
+        "💰 Tutar   : " + _whale_fmt_tutar(tutar_usd),
+        "📦 Miktar  : " + _whale_fmt_miktar(miktar, symbol),
+        "📌 Fiyat   : " + _whale_fmt_fiyat(fiyat, symbol),
+        "🕐 Zaman   : " + zaman_str,
+        ayrac,
+        "Siz de kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin.",
+        "İletişim: " + KANAL_TAG,
+    ]
+    return "\n".join(satirlar)
 
 def _whale_fetch(symbol):
     """MEXC Futures son işlemlerini çek."""
@@ -1251,23 +1268,27 @@ def _tarayici_veri_cek():
     return []
 
 def _tarayici_mesaj(yukselenler, dusenler, zaman_str):
-    kanal_baslik = "❗ " + KANAL_ADI + " ❗"
-    baslik_yuksel = "🚀 En Çok Yükselenler — MEXC Futures"
-    baslik_dusen  = "📉 En Çok Düşenler — MEXC Futures"
-
-    msg  = kanal_baslik + "\n\n"
-    msg += baslik_yuksel + "\n"
+    ayrac = "─" * 20
+    satirlar = [
+        "❗ " + KANAL_ADI + " ❗",
+        "",
+        "📊 MEXC Futures — Saatlik Tarama",
+        "🕐 " + zaman_str,
+        ayrac,
+        "🚀 En Çok Yükselenler",
+        "",
+    ]
     for i, item in enumerate(yukselenler, 1):
-        msg += f"{i}. {item['sym']} +{item['pct']:.2f}% · ${item['fiyat']}\n"
-
-    msg += "\n"
-    msg += baslik_dusen + "\n"
+        satirlar.append(f"{i}. {item['sym']:<10} +{item['pct']:.2f}%   ${item['fiyat']}")
+    satirlar += ["", ayrac, "📉 En Çok Düşenler", ""]
     for i, item in enumerate(dusenler, 1):
-        msg += f"{i}. {item['sym']} -{abs(item['pct']):.2f}% · ${item['fiyat']}\n"
-
-    msg += "\n🕐 " + zaman_str
-    msg += "\n\nSiz de kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin.\nİletişim: " + KANAL_TAG
-    return msg
+        satirlar.append(f"{i}. {item['sym']:<10} -{abs(item['pct']):.2f}%   ${item['fiyat']}")
+    satirlar += [
+        ayrac,
+        "Siz de kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin.",
+        "İletişim: " + KANAL_TAG,
+    ]
+    return "\n".join(satirlar)
 
 def _tarayici_gonder():
     tickers = _tarayici_veri_cek()
