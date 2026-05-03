@@ -1072,6 +1072,126 @@ def health():
     })
 
 
+
+# ==========================================
+# BALINA HAREKETLİLİĞİ — MEXC FUTURES
+# ==========================================
+
+WHALE_LIMIT_USD   = float(os.getenv("WHALE_LIMIT_USD", "1000000"))  # $1M
+WHALE_SYMBOLS     = ["BTC_USDT", "ETH_USDT"]
+WHALE_COOLDOWN    = 60   # aynı parite için minimum kaç saniye bekle
+WHALE_POLL_SEC    = 3    # kaç saniyede bir kontrol et
+
+_whale_last_ts    = {}   # son gönderilen işlem timestamp'i per symbol
+
+def _whale_fmt_zaman(ts_ms):
+    ts = ts_ms / 1000
+    if TR_TZ:
+        dt = datetime.fromtimestamp(ts, tz=TR_TZ)
+    else:
+        dt = datetime.utcfromtimestamp(ts)
+    return dt.strftime("%d %b %Y %H:%M:%S")
+
+def _whale_fmt_tutar(usd):
+    if usd >= 1_000_000:
+        return f"${usd/1_000_000:.2f}M"
+    return f"${usd:,.0f}"
+
+def _whale_fmt_fiyat(fiyat, symbol):
+    if "BTC" in symbol:
+        return f"{fiyat:,.2f} USDT"
+    return f"{fiyat:,.4f} USDT"
+
+def _whale_fmt_miktar(miktar, symbol):
+    coin = symbol.split("_")[0]
+    if miktar >= 1:
+        return f"{miktar:,.2f} {coin}"
+    return f"{miktar:.6f} {coin}"
+
+def _whale_mesaj(symbol, yon, tutar_usd, miktar, fiyat, zaman_str):
+    yon_emoji = "🟢" if yon == "ALIM" else "🔴"
+    yon_str   = "BÜYÜK ALIM" if yon == "ALIM" else "BÜYÜK SATIM"
+    sembol_goster = symbol.replace("_", "") + ".P"
+    return (
+        "❗ " + KANAL_ADI + " ❗\n\n"
+        "🐋 BTC ve ETH Balina Hareketliliği\n\n"
+        "⚡ Parite: " + sembol_goster + "\n"
+        + yon_emoji + " Yön: " + yon_str + "\n"
+        "💰 Tutar: " + _whale_fmt_tutar(tutar_usd) + "\n"
+        "📦 Miktar: " + _whale_fmt_miktar(miktar, symbol) + "\n"
+        "📌 Fiyat: " + _whale_fmt_fiyat(fiyat, symbol) + "\n"
+        "🕐 Zaman: " + zaman_str + "\n\n"
+        "Siz de kulübe katılıp, alarmları kaçırmamak için lütfen iletişime geçin.\n"
+        "İletişim: " + KANAL_TAG
+    )
+
+def _whale_fetch(symbol):
+    """MEXC Futures son işlemlerini çek."""
+    url = f"https://contract.mexc.com/api/v1/contract/deals/{symbol}"
+    try:
+        r = requests.get(url, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("success") and data.get("data"):
+                return data["data"]
+    except Exception as e:
+        print(f"[WHALE] Fetch hata ({symbol}): {e}")
+    return []
+
+def _whale_kontrol():
+    """Her WHALE_POLL_SEC saniyede bir tüm sembolleri kontrol et."""
+    # Başlangıçta mevcut son işlemleri kaydet — eski işlem bildirimi olmasın
+    for sym in WHALE_SYMBOLS:
+        deals = _whale_fetch(sym)
+        if deals:
+            _whale_last_ts[sym] = deals[0].get("time", 0)
+    print(f"[WHALE] Izleme basladi. Limit: ${WHALE_LIMIT_USD:,.0f} | Semboller: {WHALE_SYMBOLS}")
+
+    while True:
+        try:
+            for sym in WHALE_SYMBOLS:
+                deals = _whale_fetch(sym)
+                if not deals:
+                    continue
+
+                son_ts = _whale_last_ts.get(sym, 0)
+                yeni_islemler = [d for d in deals if d.get("time", 0) > son_ts]
+
+                if yeni_islemler:
+                    _whale_last_ts[sym] = deals[0].get("time", 0)
+
+                for deal in reversed(yeni_islemler):
+                    fiyat   = float(deal.get("p", 0))
+                    miktar  = float(deal.get("v", 0))
+                    tutar   = fiyat * miktar
+                    ts_ms   = deal.get("time", 0)
+                    taraf   = deal.get("T", 1)  # 1=alım, 2=satım (MEXC)
+
+                    if tutar < WHALE_LIMIT_USD:
+                        continue
+
+                    # Cooldown kontrolü
+                    son_bildirim = _whale_last_ts.get(f"{sym}_bildirim", 0)
+                    simdi_ms = time.time() * 1000
+                    if (simdi_ms - son_bildirim) < WHALE_COOLDOWN * 1000:
+                        continue
+
+                    yon = "ALIM" if taraf == 1 else "SATIM"
+                    zaman_str = _whale_fmt_zaman(ts_ms)
+                    mesaj = _whale_mesaj(sym, yon, tutar, miktar, fiyat, zaman_str)
+
+                    _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
+                    _whale_last_ts[f"{sym}_bildirim"] = simdi_ms
+                    print(f"[WHALE] {sym} {yon} ${tutar:,.0f} @ {fiyat}")
+
+                    if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
+                        _telegram_mesaj_gonder(TELEGRAM_LOG_ID, mesaj)
+
+        except Exception as e:
+            print(f"[WHALE] Dongu hata: {e}")
+
+        time.sleep(WHALE_POLL_SEC)
+
 # ==========================================
 # BAŞLAT
 # ==========================================
@@ -1079,6 +1199,7 @@ def health():
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
+threading.Thread(target=_whale_kontrol, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
