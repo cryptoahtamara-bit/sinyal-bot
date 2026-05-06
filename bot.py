@@ -12,6 +12,17 @@ except:
 load_dotenv()
 
 app = Flask(__name__)
+# ==========================================
+# 🐋 BALINA SCHEDULER BAŞLAT (GUNICORN FIX)
+# ==========================================
+
+def start_balina_scheduler():
+    t = threading.Thread(target=balina_scheduler)
+    t.daemon = True
+    t.start()
+    print("[BALINA] Scheduler baslatildi.")
+
+start_balina_scheduler()
 
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
