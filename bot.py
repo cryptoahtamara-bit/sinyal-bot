@@ -22,15 +22,6 @@ def start_balina_scheduler():
     t.start()
     print("[BALINA] Scheduler baslatildi.")
 
-start_balina_scheduler()
-
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-TELEGRAM_LOG_ID  = os.getenv("TELEGRAM_LOG_ID", "")
-CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
-KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
-KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
-
 # ==========================================
 # YARDIMCI FONKSİYONLAR
 # ==========================================
@@ -1456,23 +1447,26 @@ if __name__ == "__main__":
 # 🐋 BALINA OTOMATİK TETİKLEYİCİ
 # ==========================================
 
+# ==========================================
+# 🐋 BALINA AUTO SCHEDULER
+# ==========================================
+
 def balina_scheduler():
     while True:
         try:
             now = datetime.now(TR_TZ) if TR_TZ else datetime.utcnow()
 
-            # Her saat :30'da tetikle
             if now.minute == 30:
                 print(f"[BALINA AUTO] {now.strftime('%H:%M')}")
 
-                # /balina komutunun birebir aynısını çalıştırır
+                # /balina komutunun aynısı
                 threading.Thread(
                     target=_balina_manuel,
                     args=(TELEGRAM_CHAT_ID,),
                     daemon=True
                 ).start()
 
-                time.sleep(60)  # aynı dakikada tekrar çalışmasın
+                time.sleep(60)
 
             time.sleep(5)
 
@@ -1482,9 +1476,11 @@ def balina_scheduler():
 
 
 # ==========================================
-# 🚀 BOT BAŞLANGIÇTA ÇALIŞTIR
+# 🚀 SCHEDULER BAŞLAT
 # ==========================================
 
 t_balina = threading.Thread(target=balina_scheduler)
 t_balina.daemon = True
 t_balina.start()
+
+print("[BALINA] Auto scheduler aktif.")
