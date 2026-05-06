@@ -1440,3 +1440,40 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     print(f"Sunucu baslatiliyor -> http://0.0.0.0:{port}/webhook")
     app.run(host="0.0.0.0", port=port, debug=False)
+
+# ==========================================
+# 🐋 BALINA OTOMATİK TETİKLEYİCİ
+# ==========================================
+
+def balina_scheduler():
+    while True:
+        try:
+            now = datetime.now(TR_TZ) if TR_TZ else datetime.utcnow()
+
+            # Her saat :30'da tetikle
+            if now.minute == 30:
+                print(f"[BALINA AUTO] {now.strftime('%H:%M')}")
+
+                # /balina komutunun birebir aynısını çalıştırır
+                threading.Thread(
+                    target=_balina_manuel,
+                    args=(TELEGRAM_CHAT_ID,),
+                    daemon=True
+                ).start()
+
+                time.sleep(60)  # aynı dakikada tekrar çalışmasın
+
+            time.sleep(5)
+
+        except Exception as e:
+            print(f"[BALINA HATA] {e}")
+            time.sleep(10)
+
+
+# ==========================================
+# 🚀 BOT BAŞLANGIÇTA ÇALIŞTIR
+# ==========================================
+
+t_balina = threading.Thread(target=balina_scheduler)
+t_balina.daemon = True
+t_balina.start()
