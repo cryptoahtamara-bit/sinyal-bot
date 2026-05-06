@@ -1,36 +1,12 @@
 # ==========================================
-# CLEAN PRODUCTION PATCH - BALINA + TV FIX
+# FINAL SAFE BALINA PATCH
+# Railway + Gunicorn Compatible
 # ==========================================
 
 # ------------------------------------------------
-# 1) ESKİ / HATALI KISIMLARI SİL
+# ✅ 1) GLOBAL BALINA FONKSİYONU
 # ------------------------------------------------
-
-# ŞUNLARI DOSYADAN TAMAMEN KALDIR:
-
-"""
-def start_balina_scheduler():
-"""
-
-"""
-start_balina_scheduler()
-"""
-
-# Ayrıca webhook içinde bulunan eski nested yapı:
-"""
-elif text.startswith("/balina"):
-
-    def _balina_manuel(cid):
-"""
-
-# TAMAMEN SİLİNECEK.
-
-
-# ------------------------------------------------
-# 2) GLOBAL BALINA FONKSİYONU
-# ------------------------------------------------
-
-# Bunu _whale_mesaj() fonksiyonunun ALTINA EKLE
+# Bunu def _whale_mesaj(...) ALTINA EKLE
 
 def _balina_manuel(cid):
 
@@ -67,24 +43,11 @@ def _balina_manuel(cid):
                     zaman_str
                 )
 
-                # Grafik screenshot
                 try:
-
-                    img = get_screenshot_chartimg(
-                        sym.replace("_", ""),
-                        "5"
-                    )
-
-                    if img:
-                        _telegram_foto_gonder(cid, img, mesaj)
-                    else:
-                        _telegram_mesaj_gonder(cid, mesaj)
+                    _telegram_mesaj_gonder(cid, mesaj)
 
                 except Exception as e:
-
-                    print(f"[BALINA FOTO HATA] {e}")
-
-                    _telegram_mesaj_gonder(cid, mesaj)
+                    print(f"[BALINA TELEGRAM HATA] {e}")
 
                 bulunan = True
                 break
@@ -103,9 +66,8 @@ def _balina_manuel(cid):
 
 
 # ------------------------------------------------
-# 3) /BALINA KOMUTU
+# ✅ 2) /BALINA KOMUTU
 # ------------------------------------------------
-
 # Webhook içindeki /balina kısmı SADECE bu olacak:
 
 """
@@ -120,51 +82,9 @@ elif text.startswith("/balina"):
 
 
 # ------------------------------------------------
-# 4) TRADINGVIEW THREAD DEBUG FIX
+# ✅ 3) AUTO SCHEDULER
 # ------------------------------------------------
-
-# send_telegram_and_schedule_tp fonksiyonunda:
-
-# BAŞINA EKLE:
-
-"""
-print("[DEBUG] Telegram send thread başladı")
-"""
-
-# exception kısmına EKLE:
-
-"""
-except Exception as e:
-    print(f"[SEND THREAD HATA] {e}")
-"""
-
-
-# ------------------------------------------------
-# 5) SCREENSHOT STABİLİTE FIX
-# ------------------------------------------------
-
-# TradingView alarm screenshot kısmında:
-
-# GEÇİCİ OLARAK KAPAT:
-
-"""
-img = get_screenshot_tv(imageurl)
-"""
-
-# veya:
-
-"""
-img = get_screenshot_chartimg(...)
-"""
-
-# Whale tarafında screenshot aktif kalabilir.
-
-
-# ------------------------------------------------
-# 6) AUTO SCHEDULER
-# ------------------------------------------------
-
-# DOSYANIN EN ALTINA EKLE
+# Bunu threading kullanılan çalışan bölümün üstüne ekle
 
 def balina_scheduler():
 
@@ -196,29 +116,57 @@ def balina_scheduler():
             time.sleep(10)
 
 
-# THREAD BAŞLAT
+# ------------------------------------------------
+# ✅ 4) THREAD START
+# ------------------------------------------------
+# Bunu mevcut çalışan thread startlarının ALTINA EKLE
 
-t_balina = threading.Thread(target=balina_scheduler)
-
-t_balina.daemon = True
-
-t_balina.start()
+"""
+threading.Thread(
+    target=balina_scheduler,
+    daemon=True
+).start()
+"""
 
 print("[BALINA] Auto scheduler aktif.")
 
 
 # ------------------------------------------------
-# 7) WHALE SYMBOLS
+# ✅ 5) WHALE SYMBOLS
 # ------------------------------------------------
 
 WHALE_SYMBOLS = ["BTC_USDT", "ETH_USDT"]
 
 
 # ------------------------------------------------
-# 8) DOĞRU LOG
+# ❌ SİLİNECEK TÜM KODLAR
 # ------------------------------------------------
 
-# Deploy sonrası şunları görmelisin:
+# Bunların hepsini dosyadan kaldır:
+
+"""
+def start_balina_scheduler():
+"""
+
+"""
+start_balina_scheduler()
+"""
+
+"""
+t_balina = threading.Thread(...)
+"""
+
+# Ayrıca nested yapı TAMAMEN kaldırılacak:
+
+"""
+elif text.startswith("/balina"):
+
+    def _balina_manuel(cid):
+"""
+
+# ------------------------------------------------
+# ✅ DOĞRU LOG
+# ------------------------------------------------
 
 """
 [BALINA] Auto scheduler aktif.
@@ -226,8 +174,4 @@ WHALE_SYMBOLS = ["BTC_USDT", "ETH_USDT"]
 
 """
 [BALINA AUTO] 01:30
-"""
-
-"""
-[DEBUG] Telegram send thread başladı
 """
