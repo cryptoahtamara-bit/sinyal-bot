@@ -1046,6 +1046,13 @@ def webhook():
                 else:
                     print(f"[KOMUT] /tarayici yetkisiz. chat_id={chat_id}")
 
+            elif text.startswith("/trend"):
+                if chat_id in yetkili:
+                    print(f"[KOMUT] /trend islendi. chat_id={chat_id}")
+                    threading.Thread(target=lambda: _trend_gonder(chat_id), daemon=True).start()
+                else:
+                    print(f"[KOMUT] /trend yetkisiz. chat_id={chat_id}")
+
             elif text.startswith("/balina"):
                 if chat_id in yetkili:
                     print(f"[KOMUT] /balina islendi. chat_id={chat_id}")
@@ -1456,6 +1463,561 @@ def _tarayici_zamanlayici():
 
 
 # ==========================================
+# TREND ANALİZİ MODÜLİ
+# ==========================================
+
+TREND_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"
+]
+TREND_INTERVAL   = "15m"   # mum aralığı
+TREND_EMA_FAST   = 20
+TREND_EMA_SLOW   = 50
+TREND_EMA_MAJOR  = 200
+TREND_RSI_PERIOD = 14
+
+
+def _ema(values, period):
+    """Basit EMA hesaplama."""
+    if len(values) < period:
+        return None
+    k = 2 / (period + 1)
+    ema = sum(values[:period]) / period
+    for v in values[period:]:
+        ema = v * k + ema * (1 - k)
+    return ema
+
+
+def _rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0))
+        losses.append(max(-d, 0))
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - 100 / (1 + rs), 2)
+
+
+def _trend_fetch_klines(symbol, interval="15m", limit=220):
+    """Binance Futures kline verisi çek."""
+    for base in ["https://fapi.binance.com", "https://api.binance.com"]:
+        endpoint = "/fapi/v1/klines" if "fapi" in base else "/api/v3/klines"
+        try:
+            r = requests.get(
+                f"{base}{endpoint}",
+                params={"symbol": symbol, "interval": interval, "limit": limit},
+                timeout=10
+            )
+            if r.status_code == 200:
+                data = r.json()
+                closes  = [float(k[4]) for k in data]
+                volumes = [float(k[5]) for k in data]
+                highs   = [float(k[2]) for k in data]
+                lows    = [float(k[3]) for k in data]
+                return closes, volumes, highs, lows
+        except Exception as e:
+            print(f"[TREND] kline hata ({symbol}): {e}")
+    return None, None, None, None
+
+
+def _trend_fear_greed():
+    """Alternative.me'den Fear & Greed Index çek."""
+    try:
+        r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=8)
+        if r.status_code == 200:
+            d = r.json().get("data", [{}])[0]
+            deger      = int(d.get("value", 0))
+            sinifland  = d.get("value_classification", "")
+            return deger, sinifland
+    except Exception as e:
+        print(f"[TREND] fear&greed hata: {e}")
+    return None, None
+
+
+def _trend_fg_emoji(deger):
+    """Fear & Greed değerine göre emoji ve Türkçe etiket döndür."""
+    if deger is None:    return "❓", "Bilinmiyor"
+    if deger <= 24:      return "😱", "Aşırı Korku"
+    if deger <= 44:      return "😨", "Korku"
+    if deger <= 54:      return "😐", "Nötr"
+    if deger <= 74:      return "😏", "Açgözlülük"
+    return "🤑", "Aşırı Açgözlülük"
+
+
+def _trend_fg_renk(deger):
+    if deger is None: return "#9E9E9E"
+    if deger <= 24:   return "#F44336"
+    if deger <= 44:   return "#FF9800"
+    if deger <= 54:   return "#9E9E9E"
+    if deger <= 74:   return "#8BC34A"
+    return "#4CAF50"
+
+
+def _trend_btc_dominans():
+    """CoinGecko'dan BTC dominans çek."""
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/global",
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json().get("data", {})
+            dom  = data.get("market_cap_percentage", {})
+            btc_dom = round(dom.get("bitcoin", 0), 2)
+            eth_dom = round(dom.get("ethereum", 0), 2)
+            total_mcap = data.get("total_market_cap", {}).get("usd", 0)
+            mcap_change = round(data.get("market_cap_change_percentage_24h_usd", 0), 2)
+            return btc_dom, eth_dom, total_mcap, mcap_change
+    except Exception as e:
+        print(f"[TREND] dominans hata: {e}")
+    return None, None, None, None
+
+
+def _trend_skor_hesapla(symbol):
+    """
+    Bir sembol için 0-100 arası trend skoru hesapla.
+    EMA hizalaması (40p) + RSI (25p) + Momentum (20p) + Hacim (15p)
+    """
+    closes, volumes, highs, lows = _trend_fetch_klines(symbol, TREND_INTERVAL, 220)
+    if not closes or len(closes) < TREND_EMA_MAJOR + 5:
+        return None
+
+    ema20  = _ema(closes, TREND_EMA_FAST)
+    ema50  = _ema(closes, TREND_EMA_SLOW)
+    ema200 = _ema(closes, TREND_EMA_MAJOR)
+    rsi    = _rsi(closes, TREND_RSI_PERIOD)
+    fiyat  = closes[-1]
+
+    if None in (ema20, ema50, ema200, rsi):
+        return None
+
+    skor = 0
+
+    # ── EMA Hizalaması (40 puan) ──
+    # Tam bull: fiyat > ema20 > ema50 > ema200
+    ema_skor = 0
+    if fiyat > ema200: ema_skor += 10
+    if fiyat > ema50:  ema_skor += 10
+    if fiyat > ema20:  ema_skor += 10
+    if ema20 > ema50:  ema_skor += 5
+    if ema50 > ema200: ema_skor += 5
+    skor += ema_skor
+
+    # ── RSI (25 puan) ──
+    # 70+ = 25p, 60-70 = 20p, 50-60 = 15p, 40-50 = 10p, 30-40 = 5p, <30 = 0p
+    if rsi >= 70:   skor += 25
+    elif rsi >= 60: skor += 20
+    elif rsi >= 50: skor += 15
+    elif rsi >= 40: skor += 10
+    elif rsi >= 30: skor += 5
+
+    # ── Momentum: Son 10 barlık değişim (20 puan) ──
+    if len(closes) >= 11:
+        momentum_pct = (closes[-1] - closes[-11]) / closes[-11] * 100
+        if momentum_pct > 3:    skor += 20
+        elif momentum_pct > 1:  skor += 15
+        elif momentum_pct > 0:  skor += 10
+        elif momentum_pct > -1: skor += 5
+        # negatif momentum = 0p
+
+    # ── Hacim Oranı: Son bar hacmi / 20 bar ortalaması (15 puan) ──
+    if len(volumes) >= 21:
+        avg_vol = sum(volumes[-21:-1]) / 20
+        vol_ratio = volumes[-1] / avg_vol if avg_vol > 0 else 1
+        # Yüksek hacimli hareket trendi teyit eder
+        # Yükseliş trendinde yüksek hacim = güçlü; düşüş trendinde düşük hacim = zayıf satış
+        if fiyat > ema20:  # yükseliş bağlamında
+            if vol_ratio > 1.5:   skor += 15
+            elif vol_ratio > 1.0: skor += 10
+            else:                 skor += 5
+        else:  # düşüş bağlamında yüksek hacim kötü
+            if vol_ratio > 1.5:   skor += 0
+            elif vol_ratio > 1.0: skor += 3
+            else:                 skor += 8
+
+    # 24s değişim
+    degisim_24h = None
+    if len(closes) >= 97:  # 15dk * 96 = 24s
+        degisim_24h = round((closes[-1] - closes[-97]) / closes[-97] * 100, 2)
+
+    return {
+        "symbol":      symbol.replace("USDT", ""),
+        "fiyat":       fiyat,
+        "skor":        min(skor, 100),
+        "ema20":       round(ema20, 4),
+        "ema50":       round(ema50, 4),
+        "ema200":      round(ema200, 4),
+        "rsi":         rsi,
+        "degisim_24h": degisim_24h,
+        "vol_ratio":   round(vol_ratio if len(volumes) >= 21 else 1.0, 2),
+    }
+
+
+def _trend_etiket(skor):
+    if skor >= 75: return "🟢 GÜÇLÜ YÜKSELİŞ"
+    if skor >= 55: return "🟡 YÜKSELİŞ"
+    if skor >= 40: return "⚪ NÖTR"
+    if skor >= 25: return "🟠 DÜŞÜŞ"
+    return "🔴 GÜÇLÜ DÜŞÜŞ"
+
+
+def _trend_etiket_kisa(skor):
+    if skor >= 75: return "🟢 GÜÇLÜ ↑"
+    if skor >= 55: return "🟡 YÜKSELİŞ"
+    if skor >= 40: return "⚪ NÖTR"
+    if skor >= 25: return "🟠 DÜŞÜŞ"
+    return "🔴 GÜÇLÜ ↓"
+
+
+def _trend_bar_renk(skor):
+    if skor >= 75: return "#4CAF50"
+    if skor >= 55: return "#8BC34A"
+    if skor >= 40: return "#9E9E9E"
+    if skor >= 25: return "#FF9800"
+    return "#F44336"
+
+
+def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str):
+    """Trend raporunu Tema1 (Lacivert/Altın) PNG olarak üret."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import FancyBboxPatch
+        import io
+    except ImportError:
+        return None
+
+    # ── Tema 1 Renk Paleti ──────────────────────────────
+    BG       = "#0A0E1A"   # arka plan — derin lacivert
+    CARD_BG  = "#111827"   # kart zemin
+    BORDER   = "#1E2D4A"   # kart kenarlık
+    HDR_COL  = "#4A5568"   # başlık/etiket gri
+    TEXT_W   = "#FFFFFF"   # beyaz başlık
+    TEXT_M   = "#E2E8F0"   # coin isimleri
+    ALTIN    = "#C9A84C"   # altın vurgu
+    TRACK    = "#1E2D4A"   # bar arka plan
+
+    n     = len(sonuclar)
+    fig_w = 9.0
+    # Yükseklik: başlık(1.0) + metrik kartlar(0.9) + F&G(0.9) + tablo başlık(0.5) + n satır(0.65 her biri) + alt(0.4)
+    fig_h = 1.0 + 0.9 + (0.9 if fg_deger is not None else 0) + 0.5 + n * 0.65 + 0.4
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.set_xlim(0, fig_w)
+    ax.set_ylim(0, fig_h)
+    ax.axis("off")
+    fig.patch.set_facecolor(BG)
+
+    y = fig_h - 0.18
+
+    # ── Başlık ──────────────────────────────────────────
+    ax.text(fig_w / 2, y, "BEN KÜL YUTMAM — Piyasa Trend Raporu",
+            ha="center", va="top", fontsize=13, fontweight="bold", color=TEXT_W)
+    y -= 0.32
+    ax.text(fig_w / 2, y, zaman_str,
+            ha="center", va="top", fontsize=8.5, color=HDR_COL)
+    y -= 0.12
+    ax.axhline(y, xmin=0.01, xmax=0.99, color=BORDER, linewidth=0.8)
+
+    # ── 3 Metrik Kart: Piyasa Trend | F&G | BTC Dom ─────
+    y -= 0.08
+    ort_skor   = round(sum(s["skor"] for s in sonuclar) / len(sonuclar))
+    ort_etiket = _trend_etiket(ort_skor)
+    ort_renk   = _trend_bar_renk(ort_skor)
+
+    fg_emoji, fg_etiket = _trend_fg_emoji(fg_deger) if fg_deger is not None else ("❓", "—")
+    fg_renk = _trend_fg_renk(fg_deger) if fg_deger is not None else HDR_COL
+    fg_str  = f"{fg_emoji} {fg_deger}  {fg_etiket}" if fg_deger is not None else "—"
+    btc_dom_str = f"%{btc_dom}" if btc_dom else "—"
+
+    kart_bilgi = [
+        ("PİYASA TREND",  ort_etiket,   ort_renk),
+        ("FEAR & GREED",  fg_str,        fg_renk),
+        ("BTC DOM",       btc_dom_str,   ALTIN),
+    ]
+    kart_w = fig_w / 3
+    kart_h = 0.62
+    for i, (lbl, val, col) in enumerate(kart_bilgi):
+        kx = i * kart_w
+        ax.add_patch(FancyBboxPatch(
+            (kx + 0.12, y - kart_h + 0.06), kart_w - 0.24, kart_h - 0.10,
+            boxstyle="round,pad=0.05", linewidth=0.8,
+            edgecolor=BORDER, facecolor=CARD_BG))
+        ax.text(kx + kart_w / 2, y - 0.14, lbl,
+                ha="center", va="top", fontsize=7.5, color=HDR_COL, fontweight="bold")
+        ax.text(kx + kart_w / 2, y - 0.44, val,
+                ha="center", va="top", fontsize=10, color=col, fontweight="bold")
+    y -= kart_h + 0.10
+
+    # ── Fear & Greed Bar ────────────────────────────────
+    if fg_deger is not None:
+        bar_x = 0.20
+        bar_w_total = fig_w - 0.40
+        bar_h_fg    = 0.13
+
+        ax.add_patch(FancyBboxPatch(
+            (0.10, y - 0.72), fig_w - 0.20, 0.68,
+            boxstyle="round,pad=0.04", linewidth=0.8,
+            edgecolor=BORDER, facecolor=CARD_BG))
+
+        # Bölge renk doldurma (gradient görünümü)
+        bolge_renkler = [
+            (0.00, 0.25, "#F44336"),
+            (0.25, 0.45, "#FF9800"),
+            (0.45, 0.55, "#9E9E9E"),
+            (0.55, 0.75, "#8BC34A"),
+            (0.75, 1.00, "#4CAF50"),
+        ]
+        track_y = y - 0.42
+        ax.add_patch(plt.Rectangle((bar_x, track_y), bar_w_total, bar_h_fg,
+                                   color=TRACK, zorder=1))
+        for b_start, b_end, b_col in bolge_renkler:
+            w_seg = bar_w_total * (b_end - b_start)
+            alpha = 0.3
+            ax.add_patch(plt.Rectangle(
+                (bar_x + bar_w_total * b_start, track_y), w_seg, bar_h_fg,
+                color=b_col, alpha=alpha, zorder=2))
+        # Dolgu
+        ax.add_patch(plt.Rectangle(
+            (bar_x, track_y), bar_w_total * fg_deger / 100, bar_h_fg,
+            color=fg_renk, alpha=0.9, zorder=3))
+        # İbre
+        igx = bar_x + bar_w_total * fg_deger / 100
+        ax.plot([igx, igx], [track_y - 0.03, track_y + bar_h_fg + 0.03],
+                color=TEXT_W, linewidth=1.5, zorder=4)
+
+        # Bölge etiketleri
+        bolge_lbls = [
+            (0.125, "Aşırı Korku", "#F44336"),
+            (0.350, "Korku",       "#FF9800"),
+            (0.500, "Nötr",        "#9E9E9E"),
+            (0.650, "Açgözlülük",  "#8BC34A"),
+            (0.875, "Aşırı A.",    "#4CAF50"),
+        ]
+        for pct, lbl, col in bolge_lbls:
+            ax.text(bar_x + bar_w_total * pct, track_y - 0.08,
+                    lbl, ha="center", va="top", fontsize=6.5, color=col, zorder=4)
+
+        y -= 0.80
+
+    # ── Tablo Başlık ────────────────────────────────────
+    ax.axhline(y, xmin=0.01, xmax=0.99, color=BORDER, linewidth=0.8)
+    y -= 0.08
+
+    # Sütun x pozisyonları: Sembol | Trend Etiketi | Bar | 24h%
+    C_SYM   = 0.20
+    C_LABEL = 1.60
+    C_BAR   = 3.80
+    C_24H   = 8.30
+
+    hdrs = [(C_SYM, "COİN"), (C_LABEL, "TREND DURUMU"),
+            (C_BAR, "GÜÇ"), (C_24H, "24S%")]
+    for hx, hdr in hdrs:
+        ax.text(hx, y, hdr, ha="left", va="top",
+                fontsize=7, color=HDR_COL, fontweight="bold")
+    y -= 0.10
+    ax.axhline(y, xmin=0.01, xmax=0.99, color=BORDER, linewidth=0.6)
+
+    # ── Coin Satırları ──────────────────────────────────
+    satirlar = sorted(sonuclar, key=lambda x: x["skor"], reverse=True)
+    row_h = 0.65
+
+    for i, s in enumerate(satirlar):
+        ry     = y - 0.08 - i * row_h
+        row_bg = "#111827" if i % 2 == 0 else "#0D1120"
+        renk   = _trend_bar_renk(s["skor"])
+        etiket = _trend_etiket_kisa(s["skor"])
+
+        ax.add_patch(FancyBboxPatch(
+            (0.08, ry - row_h + 0.12), fig_w - 0.16, row_h - 0.10,
+            boxstyle="round,pad=0.03", linewidth=0,
+            facecolor=row_bg, zorder=0))
+
+        mid_y = ry - row_h / 2 + 0.06
+
+        # Coin ismi
+        ax.text(C_SYM, mid_y, s["symbol"],
+                ha="left", va="center", fontsize=10,
+                fontweight="bold", color=TEXT_M, zorder=1)
+
+        # Trend etiketi
+        ax.text(C_LABEL, mid_y, etiket,
+                ha="left", va="center", fontsize=9,
+                fontweight="bold", color=renk, zorder=1)
+
+        # Progress bar
+        bar_x2    = C_BAR
+        bar_w2    = 4.20
+        bar_h2    = 0.14
+        bar_y2    = mid_y - bar_h2 / 2
+        ax.add_patch(plt.Rectangle((bar_x2, bar_y2), bar_w2, bar_h2,
+                                   color=TRACK, zorder=1))
+        ax.add_patch(plt.Rectangle((bar_x2, bar_y2),
+                                   bar_w2 * s["skor"] / 100, bar_h2,
+                                   color=renk, zorder=2))
+        ax.text(bar_x2 + bar_w2 + 0.12, mid_y,
+                str(s["skor"]), ha="left", va="center",
+                fontsize=8, color=renk, fontweight="bold", zorder=2)
+
+        # 24h değişim
+        if s.get("degisim_24h") is not None:
+            d     = s["degisim_24h"]
+            d_col = "#4CAF50" if d >= 0 else "#F44336"
+            d_str = f"+{d:.1f}%" if d >= 0 else f"{d:.1f}%"
+            ax.text(C_24H, mid_y, d_str,
+                    ha="right", va="center", fontsize=8.5,
+                    fontweight="bold", color=d_col, zorder=1)
+
+    # ── Alt Bilgi ───────────────────────────────────────
+    bottom_y = y - 0.08 - n * row_h - 0.06
+    ax.axhline(bottom_y, xmin=0.01, xmax=0.99, color=BORDER, linewidth=0.6)
+
+    en_guclu = satirlar[0]["symbol"]
+    en_zayif = satirlar[-1]["symbol"]
+    ax.text(0.20, bottom_y - 0.10,
+            f"🏆 {en_guclu}   ⚠️ {en_zayif}",
+            ha="left", va="top", fontsize=7.5, color=HDR_COL)
+    ax.text(fig_w - 0.20, bottom_y - 0.10,
+            f"@dayiscalper  |  EMA+RSI+Hacim  |  Binance 15dk",
+            ha="right", va="top", fontsize=7, color=HDR_COL)
+
+    plt.tight_layout(pad=0.2)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+                facecolor=BG, edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def _trend_metin(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str):
+    """Görsel sonrası gönderilecek kısa metin özeti."""
+    ort_skor   = round(sum(s["skor"] for s in sonuclar) / len(sonuclar))
+    ort_etiket = _trend_etiket(ort_skor)
+    en_guclu   = max(sonuclar, key=lambda x: x["skor"])
+    en_zayif   = min(sonuclar, key=lambda x: x["skor"])
+
+    msg = (
+        f"📊 <b>Piyasa Trend Özeti</b>\n"
+        f"🕐 {zaman_str}\n\n"
+        f"🌐 Genel Skor: <b>{ort_skor}/100</b>  {ort_etiket}\n"
+    )
+
+    # Fear & Greed
+    if fg_deger is not None:
+        fg_emoji, fg_etiket = _trend_fg_emoji(fg_deger)
+        fg_renk_html = {
+            "Aşırı Korku": "🔴", "Korku": "🟠",
+            "Nötr": "⚪", "Açgözlülük": "🟡", "Aşırı Açgözlülük": "🟢"
+        }.get(fg_etiket, "⚪")
+        msg += f"{fg_emoji} Fear & Greed: <b>{fg_deger}/100</b>  {fg_renk_html} {fg_etiket}\n"
+
+    if btc_dom:
+        mcap_str = f"${total_mcap/1e12:.2f}T"
+        mcap_ch  = f"{'+'if mcap_change>=0 else ''}{mcap_change}%"
+        mcap_col = "📈" if mcap_change >= 0 else "📉"
+        msg += (
+            f"\n<b>— Dominans —</b>\n"
+            f"₿ BTC Dom: <b>{btc_dom}%</b>\n"
+            f"Ξ ETH Dom: <b>{eth_dom}%</b>\n"
+            f"{mcap_col} Total MCap: <b>{mcap_str}</b> ({mcap_ch})\n"
+        )
+
+    msg += "\n<b>— Coin Sıralaması —</b>\n"
+    for i, s in enumerate(sorted(sonuclar, key=lambda x: x["skor"], reverse=True), 1):
+        d = s.get("degisim_24h")
+        d_str = f" ({'+' if d>=0 else ''}{d:.1f}%)" if d is not None else ""
+        msg += f"{i}. <b>{s['symbol']}</b> — {_trend_etiket_kisa(s['skor'])} ({s['skor']}/100){d_str}\n"
+
+    msg += (
+        f"\n🏆 En Güçlü: <b>{en_guclu['symbol']}</b> ({en_guclu['skor']}/100)\n"
+        f"⚠️ En Zayıf: <b>{en_zayif['symbol']}</b> ({en_zayif['skor']}/100)\n"
+        f"\nİletişim: {KANAL_TAG}"
+    )
+    return msg
+
+
+def _trend_gonder(chat_id=None):
+    """Trend analizini hesapla, görsel + metin olarak Telegram'a gönder."""
+    hedef = chat_id or TELEGRAM_CHAT_ID
+    print(f"[TREND] Analiz basliyor...")
+
+    sonuclar = []
+    for sym in TREND_SYMBOLS:
+        try:
+            s = _trend_skor_hesapla(sym)
+            if s:
+                sonuclar.append(s)
+                print(f"[TREND] {sym}: skor={s['skor']} rsi={s['rsi']}")
+        except Exception as e:
+            print(f"[TREND] {sym} hata: {e}")
+
+    if not sonuclar:
+        _telegram_mesaj_gonder(hedef, "⚠️ Trend analizi için veri alınamadı.")
+        return
+
+    btc_dom, eth_dom, total_mcap, mcap_change = _trend_btc_dominans()
+    fg_deger, fg_sinif = _trend_fear_greed()
+    print(f"[TREND] Fear&Greed: {fg_deger} ({fg_sinif})")
+
+    if TR_TZ:
+        zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
+    else:
+        zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
+
+    # 1) Görsel
+    img = _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
+    if img:
+        _telegram_foto_gonder(hedef, img, f"📊 Trend Analizi — {zaman_str}")
+    else:
+        print("[TREND] Gorsel uretilmedi, sadece metin gonderiliyor.")
+
+    # 2) Metin özeti
+    metin = _trend_metin(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
+    _telegram_mesaj_gonder(hedef, metin)
+
+    if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != hedef:
+        _telegram_mesaj_gonder(TELEGRAM_LOG_ID, metin)
+
+    print(f"[TREND] Gonderildi. {len(sonuclar)} coin analiz edildi.")
+
+
+def _trend_zamanlayici():
+    """Her yarım saatte bir (xx:00 ve xx:30) trend raporu gönder."""
+    import datetime as dt_mod
+    print("[TREND] Zamanlayici basladi.")
+    while True:
+        try:
+            if TR_TZ:
+                simdi = datetime.now(tz=TR_TZ)
+            else:
+                simdi = datetime.utcnow()
+
+            # Sonraki :00 veya :30'u bul
+            if simdi.minute < 30:
+                sonraki = simdi.replace(minute=30, second=0, microsecond=0)
+            else:
+                sonraki = (simdi.replace(minute=0, second=0, microsecond=0)
+                           + dt_mod.timedelta(hours=1))
+
+            bekle = (sonraki - simdi).total_seconds()
+            print(f"[TREND] Sonraki rapor: {sonraki.strftime('%H:%M')} ({int(bekle//60)} dk sonra)")
+            time.sleep(bekle)
+            _trend_gonder()
+            time.sleep(10)  # double-fire önleme
+        except Exception as e:
+            print(f"[TREND] Zamanlayici hata: {e}")
+            time.sleep(60)
+
+
+# ==========================================
 # BAŞLAT
 # ==========================================
 
@@ -1464,6 +2026,7 @@ dosyadan_yukle()
 threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
 threading.Thread(target=_whale_kontrol, daemon=True).start()
 threading.Thread(target=_tarayici_zamanlayici, daemon=True).start()
+threading.Thread(target=_trend_zamanlayici, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
