@@ -1057,30 +1057,42 @@ def webhook():
                 if chat_id in yetkili:
                     def _test_ls():
                         endpoints = [
-                            ("Binance Genel L/S BTC",
+                            # MEXC — zaten açık olan domain
+                            ("MEXC L/S BTC",
+                             "https://contract.mexc.com/api/v1/contract/long_short_position/BTC_USDT"),
+                            ("MEXC Risk BTC",
+                             "https://contract.mexc.com/api/v1/contract/risk_reverse/BTC_USDT"),
+                            ("MEXC Ticker BTC",
+                             "https://contract.mexc.com/api/v1/contract/ticker?symbol=BTC_USDT"),
+                            ("MEXC Open Interest BTC",
+                             "https://contract.mexc.com/api/v1/contract/open_interest/BTC_USDT"),
+                            # Binance farklı domainler
+                            ("Binance fapi Genel L/S",
                              "https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=2"),
-                            ("Binance Top Trader BTC",
+                            ("Binance fapi Top Trader",
                              "https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=2"),
-                            ("Binance Top Pozisyon BTC",
-                             "https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=BTCUSDT&period=1h&limit=2"),
-                            ("Bybit L/S BTC",
+                            # Bybit
+                            ("Bybit L/S",
                              "https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=BTCUSDT&period=1h&limit=2"),
-                            ("OKX L/S BTC",
-                             "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?instId=BTC-USD-SWAP&period=1H"),
-                            ("CoinGlass L/S",
-                             "https://open-api.coinglass.com/public/v2/indicator/long_short_ratio?ex=Binance&pair=BTCUSDT&interval=1h&limit=2"),
+                            # Gate.io
+                            ("Gate.io OI BTC",
+                             "https://api.gateio.ws/api/v4/futures/usdt/tickers?contract=BTC_USDT"),
+                            # Bitmex
+                            ("Bitmex instrument",
+                             "https://www.bitmex.com/api/v1/instrument?symbol=XBTUSD&count=1"),
                         ]
                         satirlar = ["🧪 L/S Endpoint Testi:\n"]
                         for name, url in endpoints:
                             try:
-                                r = requests.get(url, timeout=6)
+                                r = requests.get(url, timeout=6,
+                                    headers={"User-Agent": "Mozilla/5.0"})
                                 if r.status_code == 200:
                                     satirlar.append(f"✅ {name}")
                                     satirlar.append(f"   {str(r.json())[:120]}")
                                 else:
                                     satirlar.append(f"❌ {name}: HTTP {r.status_code}")
                             except Exception as e:
-                                satirlar.append(f"❌ {name}: {str(e)[:80]}")
+                                satirlar.append(f"❌ {name}: {str(e)[:60]}")
                         _telegram_mesaj_gonder(chat_id, "\n".join(satirlar))
                     threading.Thread(target=_test_ls, daemon=True).start()
                 if chat_id in yetkili:
