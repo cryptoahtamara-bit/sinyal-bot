@@ -817,7 +817,7 @@ def rapor_gorsel(gun: str):
 
     col_w = 1.55
     row_h = 1.25
-    fig_w = 2.0 + n_tf * col_w
+    fig_w = max(10.0, 2.0 + n_tf * col_w)  # minimum 10 birim genişlik
     fig_h = 4.6 + n_sym * row_h
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
