@@ -1277,13 +1277,22 @@ def _whale_fetch(symbol):
 
     return []
 
+def _whale_ts_normalize(ts):
+    """Timestamp'i her zaman milisaniyeye çevir."""
+    if ts is None or ts == 0:
+        return 0
+    # 1e10'dan büyükse zaten ms, değilse saniye
+    return int(ts) if ts > 1e10 else int(ts * 1000)
+
+
 def _whale_kontrol():
     """Her WHALE_POLL_SEC saniyede bir tüm sembolleri kontrol et."""
     # Başlangıçta mevcut son işlemleri kaydet — eski işlem bildirimi olmasın
     for sym in WHALE_SYMBOLS:
         deals = _whale_fetch(sym)
         if deals:
-            _whale_last_ts[sym] = deals[0].get("time", 0)
+            _whale_last_ts[sym] = _whale_ts_normalize(deals[0].get("time", 0))
+            print(f"[WHALE] Baslangic ts kaydedildi: {sym} = {_whale_last_ts[sym]}")
     print(f"[WHALE] Izleme basladi. Limit: ${WHALE_LIMIT_USD:,.0f} | Semboller: {WHALE_SYMBOLS}")
 
     while True:
@@ -1294,34 +1303,42 @@ def _whale_kontrol():
                     continue
 
                 son_ts = _whale_last_ts.get(sym, 0)
-                yeni_islemler = [d for d in deals if d.get("time", 0) > son_ts]
+
+                # Timestamp'leri normalize ederek karşılaştır
+                yeni_islemler = [
+                    d for d in deals
+                    if _whale_ts_normalize(d.get("time", 0)) > son_ts
+                ]
 
                 if yeni_islemler:
-                    _whale_last_ts[sym] = deals[0].get("time", 0)
+                    _whale_last_ts[sym] = _whale_ts_normalize(deals[0].get("time", 0))
 
                 for deal in reversed(yeni_islemler):
-                    fiyat   = float(deal.get("p", 0))
-                    miktar  = float(deal.get("v", 0))
-                    tutar   = fiyat * miktar
-                    ts_ms   = deal.get("time", 0)
-                    taraf   = deal.get("T", 1)  # 1=alım, 2=satım (MEXC)
+                    fiyat  = float(deal.get("p", 0))
+                    miktar = float(deal.get("v", 0))
+                    ts_ms  = _whale_ts_normalize(deal.get("time", 0))
+                    taraf  = deal.get("T", 1)  # 1=alım, 2=satım
+
+                    # MEXC bigdeal: v = coin miktarı, tutar = fiyat * miktar
+                    tutar = fiyat * miktar
 
                     if tutar < WHALE_LIMIT_USD:
                         continue
 
                     # Cooldown kontrolü
-                    simdi_ms = time.time() * 1000
+                    simdi_ms     = time.time() * 1000
                     son_bildirim = _whale_last_bildirim.get(sym, 0)
                     if (simdi_ms - son_bildirim) < WHALE_COOLDOWN * 1000:
+                        print(f"[WHALE] {sym} cooldown devam ediyor, atlandi.")
                         continue
 
-                    yon = "ALIM" if taraf == 1 else "SATIM"
+                    yon       = "ALIM" if taraf == 1 else "SATIM"
                     zaman_str = _whale_fmt_zaman(ts_ms)
-                    mesaj = _whale_mesaj(sym, yon, tutar, miktar, fiyat, zaman_str)
+                    mesaj     = _whale_mesaj(sym, yon, tutar, miktar, fiyat, zaman_str)
 
                     _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
                     _whale_last_bildirim[sym] = simdi_ms
-                    print(f"[WHALE] {sym} {yon} ${tutar:,.0f} @ {fiyat}")
+                    print(f"[WHALE] BILDIRIM: {sym} {yon} ${tutar:,.0f} @ {fiyat}")
 
                     if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
                         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, mesaj)
