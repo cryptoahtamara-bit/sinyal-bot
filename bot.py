@@ -2,7 +2,7 @@ import os, time, json, re, threading, requests
 from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
- 
+
 try:
     import pytz
     TR_TZ = pytz.timezone("Europe/Istanbul")
@@ -1056,43 +1056,57 @@ def webhook():
             elif text.startswith("/test_ls"):
                 if chat_id in yetkili:
                     def _test_ls():
-                        endpoints = [
-                            # MEXC — zaten açık olan domain
-                            ("MEXC L/S BTC",
-                             "https://contract.mexc.com/api/v1/contract/long_short_position/BTC_USDT"),
-                            ("MEXC Risk BTC",
-                             "https://contract.mexc.com/api/v1/contract/risk_reverse/BTC_USDT"),
-                            ("MEXC Ticker BTC",
-                             "https://contract.mexc.com/api/v1/contract/ticker?symbol=BTC_USDT"),
-                            ("MEXC Open Interest BTC",
-                             "https://contract.mexc.com/api/v1/contract/open_interest/BTC_USDT"),
-                            # Binance farklı domainler
-                            ("Binance fapi Genel L/S",
-                             "https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=2"),
-                            ("Binance fapi Top Trader",
-                             "https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=2"),
-                            # Bybit
-                            ("Bybit L/S",
-                             "https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=BTCUSDT&period=1h&limit=2"),
-                            # Gate.io
-                            ("Gate.io OI BTC",
-                             "https://api.gateio.ws/api/v4/futures/usdt/tickers?contract=BTC_USDT"),
-                            # Bitmex
-                            ("Bitmex instrument",
-                             "https://www.bitmex.com/api/v1/instrument?symbol=XBTUSD&count=1"),
-                        ]
-                        satirlar = ["🧪 L/S Endpoint Testi:\n"]
-                        for name, url in endpoints:
-                            try:
-                                r = requests.get(url, timeout=6,
-                                    headers={"User-Agent": "Mozilla/5.0"})
-                                if r.status_code == 200:
-                                    satirlar.append(f"✅ {name}")
-                                    satirlar.append(f"   {str(r.json())[:120]}")
-                                else:
-                                    satirlar.append(f"❌ {name}: HTTP {r.status_code}")
-                            except Exception as e:
-                                satirlar.append(f"❌ {name}: {str(e)[:60]}")
+                        satirlar = ["🧪 Detaylı Veri Testi:\n"]
+
+                        # MEXC Risk tam veri
+                        try:
+                            r = requests.get("https://contract.mexc.com/api/v1/contract/risk_reverse/BTC_USDT", timeout=6)
+                            if r.status_code == 200:
+                                satirlar.append("✅ MEXC Risk BTC - TAM VERİ:")
+                                satirlar.append(str(r.json()))
+                        except Exception as e:
+                            satirlar.append(f"❌ MEXC Risk: {e}")
+
+                        # MEXC Ticker ETH de dene
+                        try:
+                            r = requests.get("https://contract.mexc.com/api/v1/contract/ticker?symbol=ETH_USDT", timeout=6)
+                            if r.status_code == 200:
+                                satirlar.append("\n✅ MEXC Ticker ETH - TAM VERİ:")
+                                satirlar.append(str(r.json()))
+                        except Exception as e:
+                            satirlar.append(f"❌ MEXC Ticker ETH: {e}")
+
+                        # Gate.io tam veri
+                        try:
+                            r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/tickers?contract=BTC_USDT", timeout=6)
+                            if r.status_code == 200:
+                                satirlar.append("\n✅ Gate.io BTC - TAM VERİ:")
+                                satirlar.append(str(r.json()))
+                        except Exception as e:
+                            satirlar.append(f"❌ Gate.io: {e}")
+
+                        # Gate.io L/S özel endpoint
+                        try:
+                            r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/long_liq_orders?contract=BTC_USDT&limit=3", timeout=6)
+                            satirlar.append(f"\nGate.io long_liq: HTTP {r.status_code}")
+                            if r.status_code == 200:
+                                satirlar.append(str(r.json())[:200])
+                        except Exception as e:
+                            satirlar.append(f"❌ Gate.io liq: {e}")
+
+                        # Bitmex tam veri
+                        try:
+                            r = requests.get("https://www.bitmex.com/api/v1/instrument?symbol=XBTUSD&count=1", timeout=6)
+                            if r.status_code == 200:
+                                data = r.json()[0]
+                                # L/S ile ilgili alanları filtrele
+                                ls_fields = {k: v for k, v in data.items()
+                                           if any(x in k.lower() for x in ['long', 'short', 'open', 'buy', 'sell', 'position'])}
+                                satirlar.append("\n✅ Bitmex L/S alanları:")
+                                satirlar.append(str(ls_fields))
+                        except Exception as e:
+                            satirlar.append(f"❌ Bitmex: {e}")
+
                         _telegram_mesaj_gonder(chat_id, "\n".join(satirlar))
                     threading.Thread(target=_test_ls, daemon=True).start()
                 if chat_id in yetkili:
