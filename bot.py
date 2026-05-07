@@ -227,7 +227,7 @@ def _telegram_foto_gonder(chat_id, img_data, caption, parse_mode="HTML"):
     base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
     try:
         # Filigran ekle
-        img_data = filigran_ekle(img_data)
+        img_data = filigran_ekle(img_data, alpha=0.15)
         r = requests.post(f"{base}/sendPhoto",
             data={"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode},
             files={"photo": ("chart.png", img_data, "image/png")}, timeout=30)
@@ -828,9 +828,9 @@ def rapor_gorsel(gun: str):
 
     # Başlık
     ax.text(fig_w/2, fig_h - 0.22, "BEN KÜL YUTMAM — Günlük Rapor",
-            ha="center", va="top", fontsize=13, fontweight="bold", color=TEXT_W)
+            ha="center", va="top", fontsize=16, fontweight="bold", color=TEXT_W)
     ax.text(fig_w/2, fig_h - 0.52, gun,
-            ha="center", va="top", fontsize=10, color=HDR_COL)
+            ha="center", va="top", fontsize=12.5, color=HDR_COL)
 
     # 5 Metrik kart
     metrics = [
@@ -847,9 +847,9 @@ def rapor_gorsel(gun: str):
         ax.add_patch(FancyBboxPatch((mx + 0.06, my), m_w - 0.12, 0.70,
                                      boxstyle="round,pad=0.04", linewidth=0, facecolor=CARD_BG))
         ax.text(mx + m_w/2, my + 0.54, lbl, ha="center", va="center",
-                fontsize=6.5, color=HDR_COL)
+                fontsize=8, color=HDR_COL)
         ax.text(mx + m_w/2, my + 0.22, val, ha="center", va="center",
-                fontsize=13, fontweight="bold", color=col)
+                fontsize=16, fontweight="bold", color=col)
 
     # Tablo
     t_top  = fig_h - 1.92
@@ -857,13 +857,13 @@ def rapor_gorsel(gun: str):
 
     # Başlıklar
     ax.text(0.78, t_top + 0.34, "Parite", ha="center", va="center",
-            fontsize=8, fontweight="bold", color=HDR_COL)
+            fontsize=10, fontweight="bold", color=HDR_COL)
     for j, tf in enumerate(tf_kullanilan):
         x = t_left + j * col_w + col_w/2
         ax.text(x, t_top + 0.34, tf_goster.get(tf, tf),
-                ha="center", va="center", fontsize=8, fontweight="bold", color=HDR_COL)
+                ha="center", va="center", fontsize=10, fontweight="bold", color=HDR_COL)
     ax.text(t_left + len(tf_kullanilan) * col_w + col_w/2, t_top + 0.34,
-            "Toplam", ha="center", va="center", fontsize=8, fontweight="bold", color=HDR_COL)
+            "Toplam", ha="center", va="center", fontsize=10, fontweight="bold", color=HDR_COL)
     ax.axhline(t_top + 0.06, xmin=0.02, xmax=0.98, color="#22262F", linewidth=0.8)
 
     all_rows = semboller + ["TOPLAM"]
@@ -876,7 +876,7 @@ def rapor_gorsel(gun: str):
                                      boxstyle="round,pad=0.02", linewidth=0, facecolor=row_bg, zorder=0))
 
         ax.text(0.78, y - row_h/2, sym, ha="center", va="center",
-                fontsize=9, fontweight="bold" if is_total else "normal",
+                fontsize=11, fontweight="bold" if is_total else "normal",
                 color=TEXT_W if is_total else "#C8C8C6")
 
         cols_data = []
@@ -911,12 +911,12 @@ def rapor_gorsel(gun: str):
 
             if t_v > 0:
                 ax.text(x, y - 0.18, f"%{p}", ha="center", va="center",
-                        fontsize=9, fontweight="bold", color=bar_col(p), zorder=2)
+                        fontsize=11, fontweight="bold", color=bar_col(p), zorder=2)
                 ax.text(x, y - 0.44, f"{b_v}/{t_v}", ha="center", va="center",
-                        fontsize=7.5, color=TEXT_W, zorder=2)
+                        fontsize=9.5, color=TEXT_W, zorder=2)
                 if dev > 0:
                     ax.text(x, y - 0.66, f"+{dev} devam", ha="center", va="center",
-                            fontsize=6.5, color="#E8A835", zorder=2)
+                            fontsize=8, color="#E8A835", zorder=2)
                 bw = col_w - 0.36
                 bx = x - bw/2
                 by = y - row_h + 0.13
@@ -924,16 +924,16 @@ def rapor_gorsel(gun: str):
                 ax.add_patch(plt.Rectangle((bx, by), bw * p/100, 0.07, color=bar_col(p), zorder=3))
             elif dev > 0:
                 ax.text(x, y - row_h/2, f"+{dev} devam", ha="center", va="center",
-                        fontsize=7, color="#E8A835", zorder=2)
+                        fontsize=8.5, color="#E8A835", zorder=2)
             else:
                 ax.text(x, y - row_h/2, "—", ha="center", va="center",
-                        fontsize=9, color="#3A3F4A", zorder=2)
+                        fontsize=11, color="#3A3F4A", zorder=2)
 
         if is_total:
             ax.axhline(y + 0.05, xmin=0.02, xmax=0.98, color="#333740", linewidth=0.8)
 
     ax.text(fig_w/2, 0.10, "Başarı: en az 1 TP vurulmuş  |  yeşil ≥%60  sarı ≥%35  kırmızı <%35  |  ~N nötr  +N devam",
-            ha="center", va="bottom", fontsize=6.5, color="#3A3F4A")
+            ha="center", va="bottom", fontsize=8, color="#3A3F4A")
 
     plt.tight_layout(pad=0.3)
     buf = io.BytesIO()
@@ -1923,10 +1923,10 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
 
     # ── Başlık ──────────────────────────────────────────
     ax.text(fig_w / 2, y, "BEN KÜL YUTMAM — Piyasa Trend Raporu",
-            ha="center", va="top", fontsize=13, fontweight="bold", color=TEXT_W)
+            ha="center", va="top", fontsize=16, fontweight="bold", color=TEXT_W)
     y -= 0.32
     ax.text(fig_w / 2, y, zaman_str,
-            ha="center", va="top", fontsize=8.5, color=HDR_COL)
+            ha="center", va="top", fontsize=10.5, color=HDR_COL)
     y -= 0.12
     ax.axhline(y, xmin=0.01, xmax=0.99, color=BORDER, linewidth=0.8)
 
@@ -1955,9 +1955,9 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
             boxstyle="round,pad=0.05", linewidth=0.8,
             edgecolor=BORDER, facecolor=CARD_BG))
         ax.text(kx + kart_w / 2, y - 0.14, lbl,
-                ha="center", va="top", fontsize=7.5, color=HDR_COL, fontweight="bold")
+                ha="center", va="top", fontsize=9.5, color=HDR_COL, fontweight="bold")
         ax.text(kx + kart_w / 2, y - 0.44, val,
-                ha="center", va="top", fontsize=10, color=col, fontweight="bold")
+                ha="center", va="top", fontsize=12.5, color=col, fontweight="bold")
     y -= kart_h + 0.10
 
     # ── Fear & Greed Bar ────────────────────────────────
@@ -1973,11 +1973,11 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
 
         ax.text(0.20, y - 0.10,
                 "KORKU / AÇGÖZLÜLÜK ENDEKSİ",
-                ha="left", va="center", fontsize=7.5,
+                ha="left", va="center", fontsize=9.5,
                 color=HDR_COL, fontweight="bold", zorder=3)
         ax.text(fig_w - 0.20, y - 0.10,
                 f"{fg_emoji} {fg_deger}/100 — {fg_etiket}",
-                ha="right", va="center", fontsize=9,
+                ha="right", va="center", fontsize=11,
                 color=fg_renk, fontweight="bold", zorder=3)
 
         # Bölge renk doldurma (gradient görünümü)
@@ -2016,7 +2016,7 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
         ]
         for pct, lbl, col in bolge_lbls:
             ax.text(bar_x + bar_w_total * pct, track_y - 0.08,
-                    lbl, ha="center", va="top", fontsize=6.5, color=col, zorder=4)
+                    lbl, ha="center", va="top", fontsize=8, color=col, zorder=4)
 
         y -= 0.80
 
@@ -2034,7 +2034,7 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
             (C_BAR, "GÜÇ"), (C_24H, "24S%")]
     for hx, hdr in hdrs:
         ax.text(hx, y, hdr, ha="left", va="top",
-                fontsize=7, color=HDR_COL, fontweight="bold")
+                fontsize=8.5, color=HDR_COL, fontweight="bold")
     y -= 0.10
     ax.axhline(y, xmin=0.01, xmax=0.99, color=BORDER, linewidth=0.6)
 
@@ -2057,12 +2057,12 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
 
         # Coin ismi
         ax.text(C_SYM, mid_y, s["symbol"],
-                ha="left", va="center", fontsize=10,
+                ha="left", va="center", fontsize=12.5,
                 fontweight="bold", color=TEXT_M, zorder=1)
 
         # Trend etiketi
         ax.text(C_LABEL, mid_y, etiket,
-                ha="left", va="center", fontsize=9,
+                ha="left", va="center", fontsize=11,
                 fontweight="bold", color=renk, zorder=1)
 
         # Progress bar
@@ -2077,7 +2077,7 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
                                    color=renk, zorder=2))
         ax.text(bar_x2 + bar_w2 + 0.12, mid_y,
                 str(s["skor"]), ha="left", va="center",
-                fontsize=8, color=renk, fontweight="bold", zorder=2)
+                fontsize=10, color=renk, fontweight="bold", zorder=2)
 
         # 24h değişim
         if s.get("degisim_24h") is not None:
@@ -2085,7 +2085,7 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
             d_col = "#4CAF50" if d >= 0 else "#F44336"
             d_str = f"+{d:.1f}%" if d >= 0 else f"{d:.1f}%"
             ax.text(C_24H, mid_y, d_str,
-                    ha="right", va="center", fontsize=8.5,
+                    ha="right", va="center", fontsize=10.5,
                     fontweight="bold", color=d_col, zorder=1)
 
     # ── Alt Bilgi ───────────────────────────────────────
@@ -2096,10 +2096,10 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
     en_zayif = satirlar[-1]["symbol"]
     ax.text(0.20, bottom_y - 0.10,
             f"🏆 {en_guclu}   ⚠️ {en_zayif}",
-            ha="left", va="top", fontsize=7.5, color=HDR_COL)
+            ha="left", va="top", fontsize=9.5, color=HDR_COL)
     ax.text(fig_w - 0.20, bottom_y - 0.10,
             f"@dayiscalper  |  EMA+RSI+Hacim  |  Binance 15dk",
-            ha="right", va="top", fontsize=7, color=HDR_COL)
+            ha="right", va="top", fontsize=8.5, color=HDR_COL)
 
     plt.tight_layout(pad=0.2)
     buf = io.BytesIO()
