@@ -1323,6 +1323,12 @@ def _whale_kontrol():
                     if _whale_get_ts(d) > son_ts
                 ]
 
+                # Cooldown kontrolü — aktifse bu sembolü tamamen atla
+                simdi_ms     = time.time() * 1000
+                son_bildirim = _whale_last_bildirim.get(sym, 0)
+                if (simdi_ms - son_bildirim) < WHALE_COOLDOWN * 1000:
+                    continue  # bu sembolü atla, diğerine geç
+
                 if yeni_islemler:
                     _whale_last_ts[sym] = _whale_get_ts(deals[0])
 
@@ -1338,23 +1344,18 @@ def _whale_kontrol():
                     if tutar < WHALE_LIMIT_USD:
                         continue
 
-                    # Cooldown kontrolü
-                    simdi_ms     = time.time() * 1000
-                    son_bildirim = _whale_last_bildirim.get(sym, 0)
-                    if (simdi_ms - son_bildirim) < WHALE_COOLDOWN * 1000:
-                        print(f"[WHALE] {sym} cooldown devam ediyor, atlandi.")
-                        continue
-
                     yon       = "ALIM" if taraf == 1 else "SATIM"
                     zaman_str = _whale_fmt_zaman(ts_ms)
                     mesaj     = _whale_mesaj(sym, yon, tutar, miktar, fiyat, zaman_str)
 
                     _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
-                    _whale_last_bildirim[sym] = simdi_ms
+                    _whale_last_bildirim[sym] = time.time() * 1000
                     print(f"[WHALE] BILDIRIM: {sym} {yon} ${tutar:,.0f} @ {fiyat}")
 
                     if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
                         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, mesaj)
+
+                    break  # sembol başına tek bildirim, cooldown başlat
 
         except Exception as e:
             print(f"[WHALE] Dongu hata: {e}")
