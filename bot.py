@@ -1053,7 +1053,36 @@ def webhook():
                 else:
                     print(f"[KOMUT] /tarayici yetkisiz. chat_id={chat_id}")
 
-            elif text.startswith("/trend"):
+            elif text.startswith("/test_ls"):
+                if chat_id in yetkili:
+                    def _test_ls():
+                        endpoints = [
+                            ("Binance Genel L/S BTC",
+                             "https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=2"),
+                            ("Binance Top Trader BTC",
+                             "https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=2"),
+                            ("Binance Top Pozisyon BTC",
+                             "https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=BTCUSDT&period=1h&limit=2"),
+                            ("Bybit L/S BTC",
+                             "https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=BTCUSDT&period=1h&limit=2"),
+                            ("OKX L/S BTC",
+                             "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio?instId=BTC-USD-SWAP&period=1H"),
+                            ("CoinGlass L/S",
+                             "https://open-api.coinglass.com/public/v2/indicator/long_short_ratio?ex=Binance&pair=BTCUSDT&interval=1h&limit=2"),
+                        ]
+                        satirlar = ["🧪 L/S Endpoint Testi:\n"]
+                        for name, url in endpoints:
+                            try:
+                                r = requests.get(url, timeout=6)
+                                if r.status_code == 200:
+                                    satirlar.append(f"✅ {name}")
+                                    satirlar.append(f"   {str(r.json())[:120]}")
+                                else:
+                                    satirlar.append(f"❌ {name}: HTTP {r.status_code}")
+                            except Exception as e:
+                                satirlar.append(f"❌ {name}: {str(e)[:80]}")
+                        _telegram_mesaj_gonder(chat_id, "\n".join(satirlar))
+                    threading.Thread(target=_test_ls, daemon=True).start()
                 if chat_id in yetkili:
                     print(f"[KOMUT] /trend islendi. chat_id={chat_id}")
                     threading.Thread(target=lambda: _trend_gonder(chat_id), daemon=True).start()
