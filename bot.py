@@ -1809,7 +1809,7 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
 
     kart_bilgi = [
         ("PİYASA TREND",  ort_etiket,   ort_renk),
-        ("FEAR & GREED",  fg_str,        fg_renk),
+        ("KORKU / AÇGÖZLÜLÜK",  fg_str,        fg_renk),
         ("BTC DOM",       btc_dom_str,   ALTIN),
     ]
     kart_w = fig_w / 3
@@ -1836,6 +1836,15 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
             (0.10, y - 0.72), fig_w - 0.20, 0.68,
             boxstyle="round,pad=0.04", linewidth=0.8,
             edgecolor=BORDER, facecolor=CARD_BG))
+
+        ax.text(0.20, y - 0.10,
+                "KORKU / AÇGÖZLÜLÜK ENDEKSİ",
+                ha="left", va="center", fontsize=7.5,
+                color=HDR_COL, fontweight="bold", zorder=3)
+        ax.text(fig_w - 0.20, y - 0.10,
+                f"{fg_emoji} {fg_deger}/100 — {fg_etiket}",
+                ha="right", va="center", fontsize=9,
+                color=fg_renk, fontweight="bold", zorder=3)
 
         # Bölge renk doldurma (gradient görünümü)
         bolge_renkler = [
@@ -1987,7 +1996,7 @@ def _trend_metin(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, 
             "Aşırı Korku": "🔴", "Korku": "🟠",
             "Nötr": "⚪", "Açgözlülük": "🟡", "Aşırı Açgözlülük": "🟢"
         }.get(fg_etiket, "⚪")
-        msg += f"{fg_emoji} Fear & Greed: <b>{fg_deger}/100</b>  {fg_renk_html} {fg_etiket}\n"
+        msg += f"{fg_emoji} Korku/Açgözlülük: <b>{fg_deger}/100</b>  {fg_renk_html} {fg_etiket}\n"
 
     if btc_dom:
         mcap_str = f"${total_mcap/1e12:.2f}T"
