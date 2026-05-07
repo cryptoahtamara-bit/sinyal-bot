@@ -227,7 +227,7 @@ def _telegram_foto_gonder(chat_id, img_data, caption, parse_mode="HTML"):
     base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
     try:
         # Filigran ekle
-        img_data = filigran_ekle(img_data, alpha=0.15)
+        img_data = filigran_ekle(img_data, alpha=0.05, boyut_oran=0.56)
         r = requests.post(f"{base}/sendPhoto",
             data={"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode},
             files={"photo": ("chart.png", img_data, "image/png")}, timeout=30)
@@ -816,9 +816,9 @@ def rapor_gorsel(gun: str):
     n_tf  = len(tf_kullanilan) + 1
 
     col_w = 1.55
-    row_h = 1.0   # devam satırı için biraz daha yüksek
+    row_h = 1.25
     fig_w = 2.0 + n_tf * col_w
-    fig_h = 3.8 + n_sym * row_h
+    fig_h = 4.6 + n_sym * row_h
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.set_xlim(0, fig_w)
@@ -827,9 +827,9 @@ def rapor_gorsel(gun: str):
     fig.patch.set_facecolor(BG)
 
     # Başlık
-    ax.text(fig_w/2, fig_h - 0.22, "BEN KÜL YUTMAM — Günlük Rapor",
+    ax.text(fig_w/2, fig_h - 0.25, "BEN KÜL YUTMAM — Günlük Rapor",
             ha="center", va="top", fontsize=16, fontweight="bold", color=TEXT_W)
-    ax.text(fig_w/2, fig_h - 0.52, gun,
+    ax.text(fig_w/2, fig_h - 0.62, gun,
             ha="center", va="top", fontsize=12.5, color=HDR_COL)
 
     # 5 Metrik kart
@@ -841,18 +841,19 @@ def rapor_gorsel(gun: str):
         ("Genel Başarı",  f"%{genel_oran}",    "#5B9CF6"),
     ]
     m_w = fig_w / 5
+    kart_h = 0.90
     for i, (lbl, val, col) in enumerate(metrics):
         mx = i * m_w
-        my = fig_h - 1.48
-        ax.add_patch(FancyBboxPatch((mx + 0.06, my), m_w - 0.12, 0.70,
+        my = fig_h - 1.88
+        ax.add_patch(FancyBboxPatch((mx + 0.06, my), m_w - 0.12, kart_h,
                                      boxstyle="round,pad=0.04", linewidth=0, facecolor=CARD_BG))
-        ax.text(mx + m_w/2, my + 0.54, lbl, ha="center", va="center",
+        ax.text(mx + m_w/2, my + kart_h - 0.18, lbl, ha="center", va="center",
                 fontsize=8, color=HDR_COL)
-        ax.text(mx + m_w/2, my + 0.22, val, ha="center", va="center",
+        ax.text(mx + m_w/2, my + 0.30, val, ha="center", va="center",
                 fontsize=16, fontweight="bold", color=col)
 
     # Tablo
-    t_top  = fig_h - 1.92
+    t_top  = fig_h - 2.36
     t_left = 1.55
 
     # Başlıklar
@@ -905,17 +906,17 @@ def rapor_gorsel(gun: str):
             p   = round(b_v / t_v * 100) if t_v > 0 else None
 
             ax.add_patch(FancyBboxPatch((x - col_w/2 + 0.07, y - row_h + 0.09),
-                                         col_w - 0.14, row_h - 0.16,
+                                         col_w - 0.14, row_h - 0.14,
                                          boxstyle="round,pad=0.03", linewidth=0,
                                          facecolor=cell_bg(p if p is not None else 0, t_v), zorder=1))
 
             if t_v > 0:
-                ax.text(x, y - 0.18, f"%{p}", ha="center", va="center",
+                ax.text(x, y - 0.22, f"%{p}", ha="center", va="center",
                         fontsize=11, fontweight="bold", color=bar_col(p), zorder=2)
-                ax.text(x, y - 0.44, f"{b_v}/{t_v}", ha="center", va="center",
+                ax.text(x, y - 0.55, f"{b_v}/{t_v}", ha="center", va="center",
                         fontsize=9.5, color=TEXT_W, zorder=2)
                 if dev > 0:
-                    ax.text(x, y - 0.66, f"+{dev} devam", ha="center", va="center",
+                    ax.text(x, y - 0.84, f"+{dev} devam", ha="center", va="center",
                             fontsize=8, color="#E8A835", zorder=2)
                 bw = col_w - 0.36
                 bx = x - bw/2
