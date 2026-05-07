@@ -1285,14 +1285,27 @@ def _whale_ts_normalize(ts):
     return int(ts) if ts > 1e10 else int(ts * 1000)
 
 
+def _whale_get_ts(deal):
+    """Deal dict'inden timestamp alanını bul — MEXC farklı isimler kullanabilir."""
+    for field in ["time", "t", "timestamp", "ts", "createTime", "create_time"]:
+        val = deal.get(field)
+        if val and val != 0:
+            return _whale_ts_normalize(val)
+    return 0
+
+
 def _whale_kontrol():
     """Her WHALE_POLL_SEC saniyede bir tüm sembolleri kontrol et."""
     # Başlangıçta mevcut son işlemleri kaydet — eski işlem bildirimi olmasın
     for sym in WHALE_SYMBOLS:
         deals = _whale_fetch(sym)
         if deals:
-            _whale_last_ts[sym] = _whale_ts_normalize(deals[0].get("time", 0))
-            print(f"[WHALE] Baslangic ts kaydedildi: {sym} = {_whale_last_ts[sym]}")
+            ilk = deals[0]
+            print(f"[WHALE] {sym} deal alanlari: {list(ilk.keys())}")
+            print(f"[WHALE] {sym} ilk deal: {ilk}")
+            ts = _whale_get_ts(ilk)
+            _whale_last_ts[sym] = ts
+            print(f"[WHALE] Baslangic ts kaydedildi: {sym} = {ts}")
     print(f"[WHALE] Izleme basladi. Limit: ${WHALE_LIMIT_USD:,.0f} | Semboller: {WHALE_SYMBOLS}")
 
     while True:
@@ -1307,16 +1320,16 @@ def _whale_kontrol():
                 # Timestamp'leri normalize ederek karşılaştır
                 yeni_islemler = [
                     d for d in deals
-                    if _whale_ts_normalize(d.get("time", 0)) > son_ts
+                    if _whale_get_ts(d) > son_ts
                 ]
 
                 if yeni_islemler:
-                    _whale_last_ts[sym] = _whale_ts_normalize(deals[0].get("time", 0))
+                    _whale_last_ts[sym] = _whale_get_ts(deals[0])
 
                 for deal in reversed(yeni_islemler):
                     fiyat  = float(deal.get("p", 0))
                     miktar = float(deal.get("v", 0))
-                    ts_ms  = _whale_ts_normalize(deal.get("time", 0))
+                    ts_ms  = _whale_get_ts(deal)
                     taraf  = deal.get("T", 1)  # 1=alım, 2=satım
 
                     # MEXC bigdeal: v = coin miktarı, tutar = fiyat * miktar
