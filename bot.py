@@ -1505,24 +1505,94 @@ def _rsi(closes, period=14):
 
 
 def _trend_fetch_klines(symbol, interval="15m", limit=220):
-    """Binance Futures kline verisi çek."""
-    for base in ["https://fapi.binance.com", "https://api.binance.com"]:
-        endpoint = "/fapi/v1/klines" if "fapi" in base else "/api/v3/klines"
-        try:
-            r = requests.get(
-                f"{base}{endpoint}",
-                params={"symbol": symbol, "interval": interval, "limit": limit},
-                timeout=10
-            )
-            if r.status_code == 200:
-                data = r.json()
+    """
+    Kline verisi çek.
+    Öncelik: MEXC Futures → MEXC Spot → Binance Futures → Binance Spot
+    MEXC sembol formatı: BTCUSDT → BTC_USDT (futures), BTCUSDT (spot)
+    """
+    # MEXC interval map
+    mexc_interval_map = {
+        "1m":"Min1","3m":"Min3","5m":"Min5","15m":"Min15","30m":"Min30",
+        "1h":"Min60","4h":"Hour4","1d":"Day1"
+    }
+    mexc_iv = mexc_interval_map.get(interval, "Min15")
+
+    # 1. MEXC Futures  (BTC_USDT formatı)
+    mexc_sym = symbol.replace("USDT", "_USDT") if not "_" in symbol else symbol
+    try:
+        r = requests.get(
+            f"https://contract.mexc.com/api/v1/contract/kline/{mexc_sym}",
+            params={"interval": mexc_iv, "limit": limit},
+            timeout=6
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("success") and data.get("data"):
+                d = data["data"]
+                # MEXC futures kline format: time,open,close,high,low,vol,...
+                closes  = [float(x) for x in d.get("close",  [])]
+                volumes = [float(x) for x in d.get("vol",    [])]
+                highs   = [float(x) for x in d.get("high",   [])]
+                lows    = [float(x) for x in d.get("low",    [])]
+                if len(closes) >= 50:
+                    return closes, volumes, highs, lows
+    except Exception as e:
+        print(f"[TREND] MEXC futures kline hata ({symbol}): {e}")
+
+    # 2. MEXC Spot
+    try:
+        r = requests.get(
+            "https://api.mexc.com/api/v3/klines",
+            params={"symbol": symbol, "interval": interval, "limit": limit},
+            timeout=6
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data and isinstance(data, list):
                 closes  = [float(k[4]) for k in data]
                 volumes = [float(k[5]) for k in data]
                 highs   = [float(k[2]) for k in data]
                 lows    = [float(k[3]) for k in data]
-                return closes, volumes, highs, lows
-        except Exception as e:
-            print(f"[TREND] kline hata ({symbol}): {e}")
+                if len(closes) >= 50:
+                    return closes, volumes, highs, lows
+    except Exception as e:
+        print(f"[TREND] MEXC spot kline hata ({symbol}): {e}")
+
+    # 3. Binance Futures (Railway'de bloklu olabilir, kısa timeout)
+    try:
+        r = requests.get(
+            "https://fapi.binance.com/fapi/v1/klines",
+            params={"symbol": symbol, "interval": interval, "limit": limit},
+            timeout=5
+        )
+        if r.status_code == 200:
+            data = r.json()
+            closes  = [float(k[4]) for k in data]
+            volumes = [float(k[5]) for k in data]
+            highs   = [float(k[2]) for k in data]
+            lows    = [float(k[3]) for k in data]
+            return closes, volumes, highs, lows
+    except Exception as e:
+        print(f"[TREND] Binance futures kline hata ({symbol}): {e}")
+
+    # 4. Binance Spot
+    try:
+        r = requests.get(
+            "https://api.binance.com/api/v3/klines",
+            params={"symbol": symbol, "interval": interval, "limit": limit},
+            timeout=5
+        )
+        if r.status_code == 200:
+            data = r.json()
+            closes  = [float(k[4]) for k in data]
+            volumes = [float(k[5]) for k in data]
+            highs   = [float(k[2]) for k in data]
+            lows    = [float(k[3]) for k in data]
+            return closes, volumes, highs, lows
+    except Exception as e:
+        print(f"[TREND] Binance spot kline hata ({symbol}): {e}")
+
+    print(f"[TREND] Tum kaynaklar basarisiz: {symbol}")
     return None, None, None, None
 
 
@@ -1990,7 +2060,7 @@ def _trend_gonder(chat_id=None):
 
 
 def _trend_zamanlayici():
-    """Her yarım saatte bir (xx:00 ve xx:30) trend raporu gönder."""
+    """Her saatin :30'unda trend raporu gönder. (12:30, 13:30, 14:30 ...)"""
     import datetime as dt_mod
     print("[TREND] Zamanlayici basladi.")
     while True:
@@ -2000,11 +2070,13 @@ def _trend_zamanlayici():
             else:
                 simdi = datetime.utcnow()
 
-            # Sonraki :00 veya :30'u bul
+            # Her zaman bir sonraki :30'u hedefle
             if simdi.minute < 30:
+                # Bu saatin :30'u henüz geçmedi
                 sonraki = simdi.replace(minute=30, second=0, microsecond=0)
             else:
-                sonraki = (simdi.replace(minute=0, second=0, microsecond=0)
+                # Bu saatin :30'u geçti, bir sonraki saatin :30'unu bekle
+                sonraki = (simdi.replace(minute=30, second=0, microsecond=0)
                            + dt_mod.timedelta(hours=1))
 
             bekle = (sonraki - simdi).total_seconds()
