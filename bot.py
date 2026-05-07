@@ -907,28 +907,35 @@ def rapor_gorsel(gun: str):
 # ==========================================
 
 def gunluk_ozet_gonder():
+    import datetime as dt_mod
+    OZET_SAATLERI = [(5, 45), (11, 45), (17, 45), (23, 45)]
+
     while True:
         try:
             if TR_TZ:
                 simdi = datetime.now(tz=TR_TZ)
             else:
                 simdi = datetime.utcnow()
+
+            # Sonraki hedef saati bul
             hedefler = [
-                simdi.replace(hour=12, minute=0, second=0, microsecond=0),
-                simdi.replace(hour=23, minute=59, second=0, microsecond=0),
+                simdi.replace(hour=h, minute=m, second=0, microsecond=0)
+                for h, m in OZET_SAATLERI
             ]
             gelecek = [h for h in hedefler if h > simdi]
+
             if gelecek:
                 hedef = min(gelecek)
             else:
-                import datetime as dt_mod
+                # Bugün tüm saatler geçti, yarın 05:59
                 yarin = simdi + dt_mod.timedelta(days=1)
-                hedef = yarin.replace(hour=12, minute=0, second=0, microsecond=0)
+                hedef = yarin.replace(hour=5, minute=45, second=0, microsecond=0)
+
             bekle = (hedef - simdi).total_seconds()
             print(f"[OZET] Sonraki ozet: {hedef.strftime('%H:%M')} TR ({int(bekle//60)} dk sonra)")
             time.sleep(bekle)
             _ozet_gonder()
-            time.sleep(70)
+            time.sleep(70)  # double-fire önleme
         except Exception as e:
             print(f"[OZET] Hata: {e}")
             time.sleep(60)
