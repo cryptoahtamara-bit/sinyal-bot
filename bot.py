@@ -471,6 +471,7 @@ def tp_kontrol_gonder(symbol, sinyal, timeframe, tp1, tp2, tp3, tp4, tp5, sl,
         resp = _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, msg, reply_to=message_id)
         if resp and resp.status_code == 200:
             print(f"[TP] {symbol} bildirim gonderildi.")
+        _telegram_topic_mesaj_gonder(TOPIC_ALARM, msg)
         if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
             _telegram_mesaj_gonder(TELEGRAM_LOG_ID, msg)
 
