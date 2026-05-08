@@ -1106,19 +1106,7 @@ def webhook():
             elif text.startswith("/ls"):
                 if chat_id in yetkili:
                     print(f"[KOMUT] /ls islendi. chat_id={chat_id}")
-                    def _ls_gonder_manuel():
-                        if TR_TZ:
-                            zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
-                        else:
-                            zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
-                        btc_ls = _ls_veri_cek("BTCUSDT", 24)
-                        eth_ls = _ls_veri_cek("ETHUSDT", 24)
-                        img = _ls_gorsel(btc_ls, eth_ls, zaman_str)
-                        if img:
-                            _telegram_foto_gonder_filigranli(chat_id, img, f"📊 L/S Oran Analizi — {zaman_str}")
-                        else:
-                            _telegram_mesaj_gonder(chat_id, "⚠️ L/S verisi alınamadı.")
-                    threading.Thread(target=_ls_gonder_manuel, daemon=True).start()
+                    threading.Thread(target=lambda: _ls_gonder(chat_id), daemon=True).start()
                 else:
                     print(f"[KOMUT] /ls yetkisiz. chat_id={chat_id}")
 
@@ -1908,7 +1896,117 @@ def _ls_gorsel(btc_ls, eth_ls, zaman_str):
     return buf.read()
 
 
-def _trend_btc_dominans():
+def _ls_yorum(btc_ls, eth_ls):
+    """BTC ve ETH L/S verilerinden otomatik yorum üret."""
+    satirlar = ["📊 <b>Long/Short Oran Yorumu</b>\n"]
+
+    for sym, ls_data in [("BTC", btc_ls), ("ETH", eth_ls)]:
+        genel  = ls_data.get("genel",  [])
+        balina = ls_data.get("balina", [])
+        if not genel:
+            continue
+
+        ky_long    = float(genel[-1]["longAccount"])  * 100
+        ky_short   = float(genel[-1]["shortAccount"]) * 100
+        net_fark   = ky_long - ky_short
+
+        bal_long  = float(balina[-1]["longAccount"])  * 100 if balina else None
+        bal_short = float(balina[-1]["shortAccount"]) * 100 if balina else None
+
+        satirlar.append(f"<b>{'₿' if sym=='BTC' else 'Ξ'} {sym}USDT</b>")
+        satirlar.append(f"KY Long: <b>%{ky_long:.1f}</b>  |  KY Short: <b>%{ky_short:.1f}</b>")
+
+        if bal_long:
+            satirlar.append(f"Balina Long: <b>%{bal_long:.1f}</b>  |  Balina Short: <b>%{bal_short:.1f}</b>")
+
+        # Sinyal yorumu
+        if ky_short > 60:
+            yorum = "🔴 KY ağırlıklı SHORT — Short sıkışması riski var"
+        elif ky_long > 60:
+            yorum = "🟢 KY ağırlıklı LONG — Yükseliş beklentisi güçlü"
+        else:
+            yorum = "⚪ Dengeli pozisyonlanma — Yön belirsiz"
+        satirlar.append(yorum)
+
+        # Balina vs KY çelişkisi
+        if bal_long and bal_short:
+            if bal_long > 55 and ky_short > 55:
+                satirlar.append("⚠️ <b>Dikkat:</b> Balina LONG, KY SHORT — Squeeze potansiyeli yüksek")
+            elif bal_short > 55 and ky_long > 55:
+                satirlar.append("⚠️ <b>Dikkat:</b> Balina SHORT, KY LONG — Düşüş baskısı olabilir")
+            elif abs(bal_long - ky_long) < 5:
+                satirlar.append("✅ Balina ve KY aynı yönde — Trend teyit ediliyor")
+
+        # Trend değişimi — son 6 saat
+        if len(genel) >= 6:
+            eski_long = float(genel[-6]["longAccount"]) * 100
+            degisim   = ky_long - eski_long
+            if abs(degisim) > 2:
+                yon = "↑ artıyor" if degisim > 0 else "↓ azalıyor"
+                satirlar.append(f"📉 Son 6s Long oranı {yon} ({degisim:+.1f}%)")
+
+        satirlar.append("")
+
+    satirlar.append(f"<i>Kaynak: Binance Futures  |  1 Saatlik</i>")
+    return "\n".join(satirlar)
+
+
+def _ls_gonder(chat_id=None):
+    """L/S grafiği + yorum gönder."""
+    hedef = chat_id or TELEGRAM_CHAT_ID
+    if TR_TZ:
+        zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
+    else:
+        zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
+
+    print(f"[LS] Veri cekiliyor...")
+    btc_ls = _ls_veri_cek("BTCUSDT", 24)
+    eth_ls = _ls_veri_cek("ETHUSDT", 24)
+
+    # 1) Görsel
+    img = _ls_gorsel(btc_ls, eth_ls, zaman_str)
+    if img:
+        _telegram_foto_gonder_filigranli(hedef, img, f"📈 Long/Short Oran — 1S — {zaman_str}")
+        print(f"[LS] Gorsel gonderildi.")
+    else:
+        _telegram_mesaj_gonder(hedef, "⚠️ L/S verisi alınamadı.")
+        return
+
+    # 2) Otomatik yorum
+    yorum = _ls_yorum(btc_ls, eth_ls)
+    _telegram_mesaj_gonder(hedef, yorum)
+
+    if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != hedef:
+        _telegram_mesaj_gonder(TELEGRAM_LOG_ID, yorum)
+
+    print(f"[LS] Tamamlandi.")
+
+
+def _ls_zamanlayici():
+    """Her saatin :15'inde L/S raporu gönder."""
+    import datetime as dt_mod
+    print("[LS] Zamanlayici basladi.")
+    while True:
+        try:
+            if TR_TZ:
+                simdi = datetime.now(tz=TR_TZ)
+            else:
+                simdi = datetime.utcnow()
+
+            if simdi.minute < 15:
+                sonraki = simdi.replace(minute=15, second=0, microsecond=0)
+            else:
+                sonraki = (simdi.replace(minute=15, second=0, microsecond=0)
+                           + dt_mod.timedelta(hours=1))
+
+            bekle = (sonraki - simdi).total_seconds()
+            print(f"[LS] Sonraki rapor: {sonraki.strftime('%H:%M')} ({int(bekle//60)} dk sonra)")
+            time.sleep(bekle)
+            _ls_gonder()
+            time.sleep(10)
+        except Exception as e:
+            print(f"[LS] Zamanlayici hata: {e}")
+            time.sleep(60)
     """BTC dominansını MEXC ticker'dan hesapla — CoinGecko Railway'de bloklu."""
     try:
         r = requests.get(
@@ -2345,20 +2443,6 @@ def _trend_gonder(chat_id=None):
     metin = _trend_metin(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
     _telegram_mesaj_gonder(hedef, metin)
 
-    # 3) L/S grafik — BTC ve ETH
-    try:
-        print(f"[TREND] L/S verisi cekiliyor...")
-        btc_ls = _ls_veri_cek("BTCUSDT", 24)
-        eth_ls = _ls_veri_cek("ETHUSDT", 24)
-        ls_img = _ls_gorsel(btc_ls, eth_ls, zaman_str)
-        if ls_img:
-            _telegram_foto_gonder_filigranli(hedef, ls_img, f"📈 Long/Short Oran — 1S — {zaman_str}")
-            print(f"[TREND] L/S grafik gonderildi.")
-        else:
-            print(f"[TREND] L/S gorsel uretilmedi.")
-    except Exception as e:
-        print(f"[TREND] L/S hata: {e}")
-
     if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != hedef:
         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, metin)
 
@@ -2406,6 +2490,7 @@ threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
 threading.Thread(target=_whale_kontrol, daemon=True).start()
 threading.Thread(target=_tarayici_zamanlayici, daemon=True).start()
 threading.Thread(target=_trend_zamanlayici, daemon=True).start()
+threading.Thread(target=_ls_zamanlayici, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
