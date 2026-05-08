@@ -226,8 +226,6 @@ def _telegram_mesaj_gonder(chat_id, metin, reply_to=None, parse_mode="HTML"):
 def _telegram_foto_gonder(chat_id, img_data, caption, parse_mode="HTML"):
     base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
     try:
-        # Filigran ekle
-        img_data = filigran_ekle(img_data, alpha=0.05, boyut_oran=0.56)
         r = requests.post(f"{base}/sendPhoto",
             data={"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode},
             files={"photo": ("chart.png", img_data, "image/png")}, timeout=30)
@@ -235,6 +233,11 @@ def _telegram_foto_gonder(chat_id, img_data, caption, parse_mode="HTML"):
     except Exception as e:
         print(f"[TELEGRAM] Foto gonderme hatasi: {e}")
         return None
+
+
+def _telegram_foto_gonder_filigranli(chat_id, img_data, caption, parse_mode="HTML"):
+    """Filigran ekleyerek fotoğraf gönder — sadece kendi ürettiğimiz raporlar için."""
+    return _telegram_foto_gonder(chat_id, filigran_ekle(img_data, alpha=0.05, boyut_oran=0.56), caption, parse_mode)
 
 
 # ==========================================
@@ -251,8 +254,13 @@ def get_screenshot_chartimg(symbol: str, timeframe: str):
     }
     tf  = tf_map.get(str(timeframe), "1h")
     sym = symbol.upper().replace(".P", "").replace("USDT.P", "USDT")
-    if not any(x in sym for x in [":", "BINANCE", "BYBIT", "MEXC"]):
-        sym = f"MEXC:{sym}"
+
+    # Borsa zaten belirtilmişse dokunma
+    if any(x in sym for x in [":", "BINANCE", "BYBIT", "MEXC"]):
+        pass
+    else:
+        sym = f"MEXC:{sym}.P"
+
     url     = "https://api.chart-img.com/v1/tradingview/advanced-chart"
     params  = {"symbol": sym, "interval": tf, "theme": "dark", "width": 800, "height": 500}
     headers = {"x-api-key": CHARTIMG_KEY}
@@ -260,7 +268,7 @@ def get_screenshot_chartimg(symbol: str, timeframe: str):
         r = requests.get(url, params=params, headers=headers, timeout=10)
         if r.status_code == 200:
             return r.content
-        print(f"[SCREENSHOT] chart-img hata: {r.status_code}")
+        print(f"[SCREENSHOT] chart-img hata: {r.status_code} sym={sym}")
     except Exception as e:
         print(f"[SCREENSHOT] Timeout: {e}")
     return None
@@ -993,7 +1001,7 @@ def _ozet_gonder():
     # 2) Görsel rapor
     img = rapor_gorsel(bugun)
     if img:
-        _telegram_foto_gonder(TELEGRAM_CHAT_ID, img, f"Günlük Rapor — {bugun}")
+        _telegram_foto_gonder_filigranli(TELEGRAM_CHAT_ID, img, f"Günlük Rapor — {bugun}")
     else:
         _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, rapor_mesaji(bugun))
 
@@ -1081,7 +1089,7 @@ def webhook():
                     print(f"[KOMUT] /rapor basliyor. gun={gun} chat_id={chat_id}")
                     img = rapor_gorsel(gun)
                     if img:
-                        _telegram_foto_gonder(chat_id, img, f"Günlük Rapor — {gun}")
+                        _telegram_foto_gonder_filigranli(chat_id, img, f"Günlük Rapor — {gun}")
                         print(f"[KOMUT] /rapor gorsel gonderildi.")
                     else:
                         _telegram_mesaj_gonder(chat_id, rapor_mesaji(gun))
@@ -1765,20 +1773,26 @@ def _trend_fg_renk(deger):
 
 
 def _trend_btc_dominans():
-    """CoinGecko'dan BTC dominans çek."""
+    """BTC dominansını MEXC ticker'dan hesapla — CoinGecko Railway'de bloklu."""
     try:
         r = requests.get(
-            "https://api.coingecko.com/api/v3/global",
+            "https://contract.mexc.com/api/v1/contract/ticker",
             timeout=10
         )
         if r.status_code == 200:
-            data = r.json().get("data", {})
-            dom  = data.get("market_cap_percentage", {})
-            btc_dom = round(dom.get("bitcoin", 0), 2)
-            eth_dom = round(dom.get("ethereum", 0), 2)
-            total_mcap = data.get("total_market_cap", {}).get("usd", 0)
-            mcap_change = round(data.get("market_cap_change_percentage_24h_usd", 0), 2)
-            return btc_dom, eth_dom, total_mcap, mcap_change
+            data = r.json()
+            if data.get("success") and data.get("data"):
+                tickers = data["data"]
+                # USDT pariteleri filtrele
+                usdt_tickers = [t for t in tickers if str(t.get("symbol","")).endswith("_USDT")]
+                # Toplam hacim hesapla
+                toplam_hacim = sum(float(t.get("amount24", 0) or 0) for t in usdt_tickers)
+                if toplam_hacim > 0:
+                    btc_hacim  = next((float(t.get("amount24",0) or 0) for t in usdt_tickers if t.get("symbol") == "BTC_USDT"), 0)
+                    eth_hacim  = next((float(t.get("amount24",0) or 0) for t in usdt_tickers if t.get("symbol") == "ETH_USDT"), 0)
+                    btc_dom    = round(btc_hacim / toplam_hacim * 100, 2)
+                    eth_dom    = round(eth_hacim / toplam_hacim * 100, 2)
+                    return btc_dom, eth_dom, toplam_hacim, 0
     except Exception as e:
         print(f"[TREND] dominans hata: {e}")
     return None, None, None, None
@@ -1903,9 +1917,9 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
     BG       = "#0A0E1A"   # arka plan — derin lacivert
     CARD_BG  = "#111827"   # kart zemin
     BORDER   = "#1E2D4A"   # kart kenarlık
-    HDR_COL  = "#4A5568"   # başlık/etiket gri
-    TEXT_W   = "#FFFFFF"   # beyaz başlık
-    TEXT_M   = "#E2E8F0"   # coin isimleri
+    HDR_COL  = "#E8E8E6"   # başlık/etiket — beyaz
+    TEXT_W   = "#FFFFFF"   # coin isimleri — tam beyaz
+    TEXT_M   = "#FFFFFF"   # coin isimleri
     ALTIN    = "#C9A84C"   # altın vurgu
     TRACK    = "#1E2D4A"   # bar arka plan
 
@@ -1941,7 +1955,6 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
     fg_renk = _trend_fg_renk(fg_deger) if fg_deger is not None else HDR_COL
     fg_str  = f"{fg_emoji} {fg_deger}  {fg_etiket}" if fg_deger is not None else "—"
     btc_dom_str = f"%{btc_dom}" if btc_dom else "—"
-
     kart_bilgi = [
         ("PİYASA TREND",  ort_etiket,   ort_renk),
         ("KORKU / AÇGÖZLÜLÜK",  fg_str,        fg_renk),
@@ -2134,14 +2147,13 @@ def _trend_metin(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, 
         msg += f"{fg_emoji} Korku/Açgözlülük: <b>{fg_deger}/100</b>  {fg_renk_html} {fg_etiket}\n"
 
     if btc_dom:
-        mcap_str = f"${total_mcap/1e12:.2f}T"
-        mcap_ch  = f"{'+'if mcap_change>=0 else ''}{mcap_change}%"
-        mcap_col = "📈" if mcap_change >= 0 else "📉"
+        mcap_str = f"${total_mcap/1e9:.1f}B" if total_mcap else "—"
+        mcap_ch  = f"{'+'if mcap_change>=0 else ''}{mcap_change}%" if mcap_change else ""
+        mcap_col = "📈" if mcap_change and mcap_change >= 0 else "📉"
         msg += (
-            f"\n<b>— Dominans —</b>\n"
+            f"\n<b>— Dominans (MEXC Hacim) —</b>\n"
             f"₿ BTC Dom: <b>{btc_dom}%</b>\n"
             f"Ξ ETH Dom: <b>{eth_dom}%</b>\n"
-            f"{mcap_col} Total MCap: <b>{mcap_str}</b> ({mcap_ch})\n"
         )
 
     msg += "\n<b>— Coin Sıralaması —</b>\n"
@@ -2189,7 +2201,7 @@ def _trend_gonder(chat_id=None):
     # 1) Görsel
     img = _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
     if img:
-        _telegram_foto_gonder(hedef, img, f"📊 Trend Analizi — {zaman_str}")
+        _telegram_foto_gonder_filigranli(hedef, img, f"📊 Trend Analizi — {zaman_str}")
     else:
         print("[TREND] Gorsel uretilmedi, sadece metin gonderiliyor.")
 
