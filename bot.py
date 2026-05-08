@@ -446,7 +446,7 @@ def tp_kontrol_gonder(symbol, sinyal, timeframe, tp1, tp2, tp3, tp4, tp5, sl,
     def mesaj_olustur(tp1_ok, tp2_ok, tp3_ok, tp4_ok, tp5_ok, sl_ok, erken=False):
         fiyat_str     = fmt_fiyat(sinyal_fiyat) if sinyal_fiyat else ""
         sinyal_etiket = sinyal_emoji(sinyal)
-        baslik = "⚡ <b>Erken TP/SL Bildirimi</b>" if erken else "<b>TP ve SL Kontrol</b>"
+        baslik = "⚡ <b>Erken TP/SL Bildirimi</b>" if erken else "⏱ <b>Zamana Bağlı TP/SL Bildirimi</b>"
         tf_map_g = {"1":"1DK","3":"3DK","5":"5DK","15":"15DK","30":"30DK",
                     "60":"1SA","1H":"1SA","240":"4SA","D":"1G","1D":"1G"}
         tf_goster_s = tf_map_g.get(str(timeframe), timeframe)
