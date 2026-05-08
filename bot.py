@@ -237,7 +237,7 @@ def _telegram_foto_gonder(chat_id, img_data, caption, parse_mode="HTML"):
 
 def _telegram_foto_gonder_filigranli(chat_id, img_data, caption, parse_mode="HTML"):
     """Filigran ekleyerek fotoğraf gönder — sadece kendi ürettiğimiz raporlar için."""
-    return _telegram_foto_gonder(chat_id, filigran_ekle(img_data, alpha=0.05, boyut_oran=0.56), caption, parse_mode)
+    return _telegram_foto_gonder(chat_id, filigran_ekle(img_data, alpha=0.1125, boyut_oran=0.56), caption, parse_mode)
 
 
 # ==========================================
