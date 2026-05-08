@@ -21,6 +21,15 @@ KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
 KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
 
 # ==========================================
+# TELEGRAM GRUP + TOPIC AYARLARI
+# ==========================================
+TELEGRAM_GRUP_ID  = os.getenv("TELEGRAM_GRUP_ID", "")   # -1003719500660
+TOPIC_ALARM       = int(os.getenv("TOPIC_ALARM",   "2")) # 🔔 İndikatör Alarmları
+TOPIC_ANALIZ      = int(os.getenv("TOPIC_ANALIZ",  "3")) # 📈 Piyasa Analizi
+TOPIC_YUKSELENLER = int(os.getenv("TOPIC_YUKSELENLER", "5")) # 🔍 Yükselenler · Düşenler
+TOPIC_RAPOR       = int(os.getenv("TOPIC_RAPOR",   "6")) # 📊 Rapor · İstatistik
+
+# ==========================================
 # FİLİGRAN
 # ==========================================
 
@@ -223,6 +232,27 @@ def _telegram_mesaj_gonder(chat_id, metin, reply_to=None, parse_mode="HTML"):
         return None
 
 
+def _telegram_topic_mesaj_gonder(topic_id, metin, parse_mode="HTML"):
+    """Grubun belirtilen topic'ine metin gönder."""
+    if not TELEGRAM_GRUP_ID:
+        return None
+    base    = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+    payload = {
+        "chat_id": TELEGRAM_GRUP_ID,
+        "message_thread_id": topic_id,
+        "text": metin,
+        "parse_mode": parse_mode
+    }
+    try:
+        r = requests.post(f"{base}/sendMessage", json=payload, timeout=15)
+        if r.status_code != 200:
+            print(f"[GRUP] Topic mesaj hatasi: {r.status_code} topic={topic_id}")
+        return r
+    except Exception as e:
+        print(f"[GRUP] Topic mesaj hatasi: {e}")
+        return None
+
+
 def _telegram_foto_gonder(chat_id, img_data, caption, parse_mode="HTML"):
     base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
     try:
@@ -235,9 +265,32 @@ def _telegram_foto_gonder(chat_id, img_data, caption, parse_mode="HTML"):
         return None
 
 
+def _telegram_topic_foto_gonder(topic_id, img_data, caption, parse_mode="HTML"):
+    """Grubun belirtilen topic'ine fotoğraf gönder."""
+    if not TELEGRAM_GRUP_ID:
+        return None
+    base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+    try:
+        r = requests.post(f"{base}/sendPhoto",
+            data={"chat_id": TELEGRAM_GRUP_ID, "message_thread_id": topic_id,
+                  "caption": caption, "parse_mode": parse_mode},
+            files={"photo": ("chart.png", img_data, "image/png")}, timeout=30)
+        if r.status_code != 200:
+            print(f"[GRUP] Topic foto hatasi: {r.status_code} topic={topic_id}")
+        return r
+    except Exception as e:
+        print(f"[GRUP] Topic foto hatasi: {e}")
+        return None
+
+
 def _telegram_foto_gonder_filigranli(chat_id, img_data, caption, parse_mode="HTML"):
     """Filigran ekleyerek fotoğraf gönder — sadece kendi ürettiğimiz raporlar için."""
     return _telegram_foto_gonder(chat_id, filigran_ekle(img_data, alpha=0.1125, boyut_oran=0.56), caption, parse_mode)
+
+
+def _topic_foto_gonder_filigranli(topic_id, img_data, caption, parse_mode="HTML"):
+    """Grubun topic'ine filigranla fotoğraf gönder."""
+    return _telegram_topic_foto_gonder(topic_id, filigran_ekle(img_data, alpha=0.1125, boyut_oran=0.56), caption, parse_mode)
 
 
 # ==========================================
@@ -496,6 +549,12 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal,
         resp = _telegram_foto_gonder(TELEGRAM_CHAT_ID, img_data, caption)
     else:
         resp = _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, caption)
+
+    # Gruba da gönder — 🔔 İndikatör Alarmları topic'i
+    if img_data:
+        _telegram_topic_foto_gonder(TOPIC_ALARM, img_data, caption)
+    else:
+        _telegram_topic_mesaj_gonder(TOPIC_ALARM, caption)
 
     if resp and resp.status_code == 200:
         message_id = resp.json().get("result", {}).get("message_id")
@@ -997,13 +1056,16 @@ def _ozet_gonder():
 
     # 1) İstatistik mesajı
     _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, istatistik_mesaji())
+    _telegram_topic_mesaj_gonder(TOPIC_RAPOR, istatistik_mesaji())
 
     # 2) Görsel rapor
     img = rapor_gorsel(bugun)
     if img:
         _telegram_foto_gonder_filigranli(TELEGRAM_CHAT_ID, img, f"Günlük Rapor — {bugun}")
+        _topic_foto_gonder_filigranli(TOPIC_RAPOR, img, f"Günlük Rapor — {bugun}")
     else:
         _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, rapor_mesaji(bugun))
+        _telegram_topic_mesaj_gonder(TOPIC_RAPOR, rapor_mesaji(bugun))
 
     b = istatistik_hesapla(gun_filtre=bugun)
     print(f"[OZET] Gonderildi. {b['toplam']} sinyal.")
@@ -1413,6 +1475,7 @@ def _whale_kontrol():
                     mesaj     = _whale_mesaj(sym, yon, tutar, miktar, fiyat, zaman_str)
 
                     _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
+                    _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, mesaj)
                     _whale_last_bildirim[sym] = time.time() * 1000
                     print(f"[WHALE] BILDIRIM: {sym} {yon} ${tutar:,.0f} @ {fiyat}")
 
@@ -1528,6 +1591,7 @@ def _tarayici_gonder():
 
     mesaj = _tarayici_mesaj(yukselenler, dusenler, zaman_str)
     _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
+    _telegram_topic_mesaj_gonder(TOPIC_YUKSELENLER, mesaj)
     print(f"[TARAYICI] Gonderildi. Top {TARAYICI_TOP_N} yukselenler/dusenler.")
 
     if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
@@ -1967,6 +2031,7 @@ def _ls_gonder(chat_id=None):
     img = _ls_gorsel(btc_ls, eth_ls, zaman_str)
     if img:
         _telegram_foto_gonder_filigranli(hedef, img, f"📈 Long/Short Oran — 1S — {zaman_str}")
+        _topic_foto_gonder_filigranli(TOPIC_ANALIZ, img, f"📈 Long/Short Oran — 1S — {zaman_str}")
         print(f"[LS] Gorsel gonderildi.")
     else:
         _telegram_mesaj_gonder(hedef, "⚠️ L/S verisi alınamadı.")
@@ -1975,6 +2040,7 @@ def _ls_gonder(chat_id=None):
     # 2) Otomatik yorum
     yorum = _ls_yorum(btc_ls, eth_ls)
     _telegram_mesaj_gonder(hedef, yorum)
+    _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, yorum)
 
     if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != hedef:
         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, yorum)
@@ -2436,12 +2502,14 @@ def _trend_gonder(chat_id=None):
     img = _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
     if img:
         _telegram_foto_gonder_filigranli(hedef, img, f"📊 Trend Analizi — {zaman_str}")
+        _topic_foto_gonder_filigranli(TOPIC_ANALIZ, img, f"📊 Trend Analizi — {zaman_str}")
     else:
         print("[TREND] Gorsel uretilmedi, sadece metin gonderiliyor.")
 
     # 2) Metin özeti
     metin = _trend_metin(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
     _telegram_mesaj_gonder(hedef, metin)
+    _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, metin)
 
     if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != hedef:
         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, metin)
