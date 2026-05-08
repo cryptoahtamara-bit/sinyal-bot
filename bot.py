@@ -1961,17 +1961,17 @@ def _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger,
         ("BTC DOM",       btc_dom_str,   ALTIN),
     ]
     kart_w = fig_w / 3
-    kart_h = 0.62
+    kart_h = 0.85  # daha yüksek kart — büyük font için
     for i, (lbl, val, col) in enumerate(kart_bilgi):
         kx = i * kart_w
         ax.add_patch(FancyBboxPatch(
             (kx + 0.12, y - kart_h + 0.06), kart_w - 0.24, kart_h - 0.10,
             boxstyle="round,pad=0.05", linewidth=0.8,
             edgecolor=BORDER, facecolor=CARD_BG))
-        ax.text(kx + kart_w / 2, y - 0.14, lbl,
-                ha="center", va="top", fontsize=9.5, color=HDR_COL, fontweight="bold")
-        ax.text(kx + kart_w / 2, y - 0.44, val,
-                ha="center", va="top", fontsize=12.5, color=col, fontweight="bold")
+        ax.text(kx + kart_w / 2, y - 0.16, lbl,
+                ha="center", va="top", fontsize=16.5, color=HDR_COL, fontweight="bold")
+        ax.text(kx + kart_w / 2, y - 0.52, val,
+                ha="center", va="top", fontsize=21.5, color=col, fontweight="bold")
     y -= kart_h + 0.10
 
     # ── Fear & Greed Bar ────────────────────────────────
