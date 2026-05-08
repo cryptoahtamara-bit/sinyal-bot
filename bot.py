@@ -1103,30 +1103,26 @@ def webhook():
                 else:
                     print(f"[KOMUT] /tarayici yetkisiz. chat_id={chat_id}")
 
-            elif text.startswith("/test_ls"):
+            elif text.startswith("/ls"):
                 if chat_id in yetkili:
-                    def _test_ls():
-                        satirlar = ["🧪 L/S Endpoint Testi:\n"]
-                        endpoints = [
-                            ("Binance Genel L/S", "https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=24"),
-                            ("Binance Top Trader", "https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=24"),
-                            ("CoinGlass L/S v2", "https://open-api.coinglass.com/public/v2/indicator/long_short_ratio?ex=Binance&pair=BTCUSDT&interval=1h&limit=24"),
-                            ("CoinGlass v3 global", "https://open-api-v3.coinglass.com/api/futures/globalLongShortAccountRatio/history?exchange=Binance&symbol=BTCUSDT&interval=1h&limit=24"),
-                            ("CoinGlass chart embed", "https://www.coinglass.com/pro/futures/LongShortRatio"),
-                            ("Bybit L/S", "https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=BTCUSDT&period=1h&limit=24"),
-                        ]
-                        for name, url in endpoints:
-                            try:
-                                r = requests.get(url, timeout=6, headers={"User-Agent": "Mozilla/5.0"})
-                                if r.status_code == 200:
-                                    satirlar.append(f"✅ {name}")
-                                    satirlar.append(f"   {str(r.text[:150])}")
-                                else:
-                                    satirlar.append(f"❌ {name}: HTTP {r.status_code}")
-                            except Exception as e:
-                                satirlar.append(f"❌ {name}: {str(e)[:60]}")
-                        _telegram_mesaj_gonder(chat_id, "\n".join(satirlar))
-                    threading.Thread(target=_test_ls, daemon=True).start()
+                    print(f"[KOMUT] /ls islendi. chat_id={chat_id}")
+                    def _ls_gonder_manuel():
+                        if TR_TZ:
+                            zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
+                        else:
+                            zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
+                        btc_ls = _ls_veri_cek("BTCUSDT", 24)
+                        eth_ls = _ls_veri_cek("ETHUSDT", 24)
+                        img = _ls_gorsel(btc_ls, eth_ls, zaman_str)
+                        if img:
+                            _telegram_foto_gonder_filigranli(chat_id, img, f"📊 L/S Oran Analizi — {zaman_str}")
+                        else:
+                            _telegram_mesaj_gonder(chat_id, "⚠️ L/S verisi alınamadı.")
+                    threading.Thread(target=_ls_gonder_manuel, daemon=True).start()
+                else:
+                    print(f"[KOMUT] /ls yetkisiz. chat_id={chat_id}")
+
+            elif text.startswith("/trend"):
                 if chat_id in yetkili:
                     print(f"[KOMUT] /trend islendi. chat_id={chat_id}")
                     threading.Thread(target=lambda: _trend_gonder(chat_id), daemon=True).start()
@@ -1740,6 +1736,178 @@ def _trend_fg_renk(deger):
     return "#4CAF50"
 
 
+def _ls_veri_cek(symbol="BTCUSDT", limit=24):
+    """
+    Binance Futures'tan Long/Short oranı çek.
+    Genel hesap oranı + Top Trader oranı (balina vs KY ayrımı)
+    Her biri: [{longAccount, shortAccount, longShortRatio, timestamp}, ...]
+    """
+    sonuc = {"genel": [], "balina": []}
+    try:
+        # Genel L/S — tüm hesaplar (KY ağırlıklı)
+        r = requests.get(
+            "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+            params={"symbol": symbol, "period": "1h", "limit": limit},
+            timeout=8
+        )
+        if r.status_code == 200:
+            sonuc["genel"] = r.json()
+    except Exception as e:
+        print(f"[LS] genel hata: {e}")
+
+    try:
+        # Top Trader L/S — büyük hesaplar (balina)
+        r = requests.get(
+            "https://fapi.binance.com/futures/data/topLongShortAccountRatio",
+            params={"symbol": symbol, "period": "1h", "limit": limit},
+            timeout=8
+        )
+        if r.status_code == 200:
+            sonuc["balina"] = r.json()
+    except Exception as e:
+        print(f"[LS] balina hata: {e}")
+
+    return sonuc
+
+
+def _ls_gorsel(btc_ls, eth_ls, zaman_str):
+    """
+    Hyblock tarzı L/S grafik görseli üret.
+    Üst: bar chart (net fark)
+    Alt: çizgi grafik (balina % / KY %)
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.gridspec as gridspec
+        from matplotlib.patches import FancyBboxPatch
+        import io
+        import numpy as np
+    except ImportError:
+        return None
+
+    BG      = "#0A0E1A"
+    CARD_BG = "#111827"
+    BORDER  = "#1E2D4A"
+    TEXT_W  = "#FFFFFF"
+    HDR_COL = "#E8E8E6"
+
+    fig = plt.figure(figsize=(10, 8), facecolor=BG)
+    fig.patch.set_facecolor(BG)
+
+    # 2 satır, 2 sütun (BTC sol, ETH sağ)
+    gs = gridspec.GridSpec(3, 2, figure=fig, hspace=0.45, wspace=0.3,
+                           top=0.92, bottom=0.06, left=0.07, right=0.97)
+
+    fig.text(0.5, 0.96, "BEN KÜL YUTMAM — Long/Short Oran Analizi",
+             ha="center", va="top", fontsize=14, fontweight="bold", color=TEXT_W)
+    fig.text(0.5, 0.93, f"{zaman_str}  |  Binance Futures  |  1 Saatlik  |  Son 24 Saat",
+             ha="center", va="top", fontsize=9, color=HDR_COL)
+
+    for col_idx, (sym, ls_data) in enumerate([("BTC", btc_ls), ("ETH", eth_ls)]):
+        genel  = ls_data.get("genel",  [])
+        balina = ls_data.get("balina", [])
+
+        if not genel:
+            continue
+
+        # Veriyi tersine çevir (eski → yeni)
+        genel  = list(reversed(genel))
+        balina = list(reversed(balina)) if balina else []
+
+        timestamps   = [d["timestamp"] for d in genel]
+        long_genel   = [float(d["longAccount"])  * 100 for d in genel]
+        short_genel  = [float(d["shortAccount"]) * 100 for d in genel]
+        net_fark     = [l - s for l, s in zip(long_genel, short_genel)]
+
+        long_balina  = [float(d["longAccount"])  * 100 for d in balina] if balina else []
+        short_balina = [float(d["shortAccount"]) * 100 for d in balina] if balina else []
+
+        x = list(range(len(timestamps)))
+
+        # ── Üst: Bar chart (net fark) ──
+        ax_bar = fig.add_subplot(gs[0, col_idx])
+        ax_bar.set_facecolor(CARD_BG)
+        ax_bar.spines[:].set_color(BORDER)
+        ax_bar.tick_params(colors=HDR_COL, labelsize=7)
+
+        colors_bar = ["#4CAF50" if v >= 0 else "#F44336" for v in net_fark]
+        ax_bar.bar(x, net_fark, color=colors_bar, width=0.8)
+        ax_bar.axhline(0, color=HDR_COL, linewidth=0.5, alpha=0.5)
+
+        son_fark = net_fark[-1] if net_fark else 0
+        fark_col = "#4CAF50" if son_fark >= 0 else "#F44336"
+        ax_bar.set_title(f"{sym} — Net L/S Fark: {son_fark:+.2f}",
+                         color=TEXT_W, fontsize=10, fontweight="bold", pad=4)
+        ax_bar.set_xticks([])
+        ax_bar.yaxis.label.set_color(HDR_COL)
+
+        # Son değer etiketi
+        ax_bar.annotate(f"{son_fark:+.3f}", xy=(x[-1], son_fark),
+                        xytext=(5, 5), textcoords="offset points",
+                        color=fark_col, fontsize=8, fontweight="bold",
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor=CARD_BG, edgecolor=fark_col))
+
+        # ── Alt: Çizgi grafik (Balina vs KY) ──
+        ax_line = fig.add_subplot(gs[1:, col_idx])
+        ax_line.set_facecolor(CARD_BG)
+        ax_line.spines[:].set_color(BORDER)
+        ax_line.tick_params(colors=HDR_COL, labelsize=7)
+
+        # KY (genel hesap) — yeşil
+        ax_line.plot(x, long_genel, color="#4CAF50", linewidth=1.5,
+                     label=f"KY Long %{long_genel[-1]:.2f}")
+        ax_line.plot(x, short_genel, color="#F44336", linewidth=1.5,
+                     label=f"KY Short %{short_genel[-1]:.2f}")
+
+        # Balina (top trader) — kesikli
+        if long_balina:
+            ax_line.plot(x[:len(long_balina)], long_balina,
+                         color="#81C784", linewidth=1.2, linestyle="--",
+                         label=f"Balina Long %{long_balina[-1]:.2f}")
+            ax_line.plot(x[:len(short_balina)], short_balina,
+                         color="#E57373", linewidth=1.2, linestyle="--",
+                         label=f"Balina Short %{short_balina[-1]:.2f}")
+
+        ax_line.axhline(50, color=HDR_COL, linewidth=0.4, alpha=0.4, linestyle=":")
+        ax_line.set_ylim(30, 70)
+
+        # Son değer etiketleri
+        ax_line.annotate(f"%{long_genel[-1]:.2f}", xy=(x[-1], long_genel[-1]),
+                         xytext=(4, 0), textcoords="offset points",
+                         color="#4CAF50", fontsize=8, fontweight="bold",
+                         bbox=dict(boxstyle="round,pad=0.2", facecolor=CARD_BG, edgecolor="#4CAF50"))
+        ax_line.annotate(f"%{short_genel[-1]:.2f}", xy=(x[-1], short_genel[-1]),
+                         xytext=(4, 0), textcoords="offset points",
+                         color="#F44336", fontsize=8, fontweight="bold",
+                         bbox=dict(boxstyle="round,pad=0.2", facecolor=CARD_BG, edgecolor="#F44336"))
+
+        # X ekseni — saat etiketleri (her 4 saatte bir)
+        tick_idx = list(range(0, len(x), 4))
+        tick_lbl = []
+        for ti in tick_idx:
+            try:
+                import datetime as dt
+                ts = timestamps[ti] / 1000
+                tick_lbl.append(dt.datetime.utcfromtimestamp(ts).strftime("%H:%M"))
+            except:
+                tick_lbl.append("")
+        ax_line.set_xticks(tick_idx)
+        ax_line.set_xticklabels(tick_lbl, rotation=30, ha="right", fontsize=7, color=HDR_COL)
+
+        legend = ax_line.legend(loc="lower left", fontsize=7,
+                                facecolor=CARD_BG, edgecolor=BORDER,
+                                labelcolor=HDR_COL)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=140, bbox_inches="tight",
+                facecolor=BG, edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
 def _trend_btc_dominans():
     """BTC dominansını MEXC ticker'dan hesapla — CoinGecko Railway'de bloklu."""
     try:
@@ -2139,7 +2307,7 @@ def _trend_metin(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, 
 
 
 def _trend_gonder(chat_id=None):
-    """Trend analizini hesapla, görsel + metin olarak Telegram'a gönder."""
+    """Trend analizini hesapla, görsel + metin + L/S grafik olarak Telegram'a gönder."""
     hedef = chat_id or TELEGRAM_CHAT_ID
     print(f"[TREND] Analiz basliyor...")
 
@@ -2166,7 +2334,7 @@ def _trend_gonder(chat_id=None):
     else:
         zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
 
-    # 1) Görsel
+    # 1) Trend görseli
     img = _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
     if img:
         _telegram_foto_gonder_filigranli(hedef, img, f"📊 Trend Analizi — {zaman_str}")
@@ -2176,6 +2344,20 @@ def _trend_gonder(chat_id=None):
     # 2) Metin özeti
     metin = _trend_metin(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
     _telegram_mesaj_gonder(hedef, metin)
+
+    # 3) L/S grafik — BTC ve ETH
+    try:
+        print(f"[TREND] L/S verisi cekiliyor...")
+        btc_ls = _ls_veri_cek("BTCUSDT", 24)
+        eth_ls = _ls_veri_cek("ETHUSDT", 24)
+        ls_img = _ls_gorsel(btc_ls, eth_ls, zaman_str)
+        if ls_img:
+            _telegram_foto_gonder_filigranli(hedef, ls_img, f"📈 Long/Short Oran — 1S — {zaman_str}")
+            print(f"[TREND] L/S grafik gonderildi.")
+        else:
+            print(f"[TREND] L/S gorsel uretilmedi.")
+    except Exception as e:
+        print(f"[TREND] L/S hata: {e}")
 
     if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != hedef:
         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, metin)
