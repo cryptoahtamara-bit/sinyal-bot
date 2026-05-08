@@ -1788,6 +1788,30 @@ def _trend_fg_renk(deger):
     return "#4CAF50"
 
 
+def _trend_btc_dominans():
+    """BTC dominansını MEXC ticker'dan hesapla — CoinGecko Railway'de bloklu."""
+    try:
+        r = requests.get(
+            "https://contract.mexc.com/api/v1/contract/ticker",
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("success") and data.get("data"):
+                tickers = data["data"]
+                usdt_tickers = [t for t in tickers if str(t.get("symbol","")).endswith("_USDT")]
+                toplam_hacim = sum(float(t.get("amount24", 0) or 0) for t in usdt_tickers)
+                if toplam_hacim > 0:
+                    btc_hacim = next((float(t.get("amount24",0) or 0) for t in usdt_tickers if t.get("symbol") == "BTC_USDT"), 0)
+                    eth_hacim = next((float(t.get("amount24",0) or 0) for t in usdt_tickers if t.get("symbol") == "ETH_USDT"), 0)
+                    btc_dom   = round(btc_hacim / toplam_hacim * 100, 2)
+                    eth_dom   = round(eth_hacim / toplam_hacim * 100, 2)
+                    return btc_dom, eth_dom, toplam_hacim, 0
+    except Exception as e:
+        print(f"[TREND] dominans hata: {e}")
+    return None, None, None, None
+
+
 def _ls_veri_cek(symbol="BTCUSDT", limit=24):
     """
     Binance Futures'tan Long/Short oranı çek.
