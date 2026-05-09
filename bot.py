@@ -23,11 +23,12 @@ KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
 # ==========================================
 # TELEGRAM GRUP + TOPIC AYARLARI
 # ==========================================
-TELEGRAM_GRUP_ID  = os.getenv("TELEGRAM_GRUP_ID", "")   # -1003719500660
-TOPIC_ALARM       = int(os.getenv("TOPIC_ALARM",   "2")) # 🔔 İndikatör Alarmları
-TOPIC_ANALIZ      = int(os.getenv("TOPIC_ANALIZ",  "3")) # 📈 Piyasa Analizi
-TOPIC_YUKSELENLER = int(os.getenv("TOPIC_YUKSELENLER", "5")) # 🔍 Yükselenler · Düşenler
-TOPIC_RAPOR       = int(os.getenv("TOPIC_RAPOR",   "6")) # 📊 Rapor · İstatistik
+TELEGRAM_GRUP_ID  = os.getenv("TELEGRAM_GRUP_ID", "")
+TOPIC_ALARM       = int(os.getenv("TOPIC_ALARM",   "2"))
+TOPIC_ANALIZ      = int(os.getenv("TOPIC_ANALIZ",  "3"))
+TOPIC_YUKSELENLER = int(os.getenv("TOPIC_YUKSELENLER", "5"))
+TOPIC_RAPOR       = int(os.getenv("TOPIC_RAPOR",   "6"))
+TOPIC_HABER       = int(os.getenv("TOPIC_HABER",   "287")) # 📰 Haberler & Analiz
 
 # ==========================================
 # FİLİGRAN
@@ -1789,6 +1790,173 @@ def _trend_fg_renk(deger):
     return "#4CAF50"
 
 
+# ==========================================
+# HABER SİSTEMİ
+# ==========================================
+
+HABER_COINLER = [
+    "bitcoin", "btc", "ethereum", "eth", "bnb", "binance",
+    "solana", "sol", "xrp", "ripple", "dogecoin", "doge",
+    "cardano", "ada", "avalanche", "avax", "chainlink", "link",
+    "polkadot", "dot"
+]
+
+HABER_KRITIK = [
+    "etf", "sec", "regulation", "hack", "exploit", "fed",
+    "federal reserve", "interest rate", "cpi", "inflation",
+    "halving", "liquidation", "whale", "ban", "lawsuit",
+    "approval", "rejected", "crash", "rally", "ath", "all-time high",
+    "blackrock", "fidelity", "institutional", "bankruptcy"
+]
+
+HABER_GONDERILENLER = set()  # Aynı haberi iki kez gönderme
+
+RSS_KAYNAKLAR = [
+    ("CoinDesk",      "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+    ("CoinTelegraph", "https://cointelegraph.com/rss"),
+    ("Decrypt",       "https://decrypt.co/feed"),
+]
+
+
+def _haber_rss_cek(url):
+    """RSS feed'den haberleri çek."""
+    try:
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return []
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(r.content)
+        haberler = []
+        for item in root.findall(".//item")[:20]:
+            baslik = item.findtext("title", "").strip()
+            link   = item.findtext("link",  "").strip()
+            tarih  = item.findtext("pubDate", "").strip()
+            desc   = item.findtext("description", "").strip()
+            if baslik and link:
+                haberler.append({"baslik": baslik, "link": link, "tarih": tarih, "desc": desc})
+        return haberler
+    except Exception as e:
+        print(f"[HABER] RSS cekme hatasi: {e}")
+        return []
+
+
+def _haber_onemli_mi(baslik, desc=""):
+    """Haber önemli mi? Coin veya kritik kelime içeriyor mu?"""
+    metin = (baslik + " " + desc).lower()
+    coin_eslesti  = any(coin in metin for coin in HABER_COINLER)
+    kritik_eslesti = any(kw in metin for kw in HABER_KRITIK)
+    return coin_eslesti and kritik_eslesti
+
+
+def _haber_etki_analiz(baslik):
+    """Claude API ile Türkçe özet + piyasa etkisi üret."""
+    try:
+        payload = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 300,
+            "messages": [{
+                "role": "user",
+                "content": f"""Aşağıdaki kripto haber başlığını analiz et. 
+SADECE JSON formatında yanıt ver, başka hiçbir şey yazma:
+
+{{
+  "ozet": "Türkçe 1-2 cümle özet",
+  "etki": "Pozitif" veya "Negatif" veya "Nötr",
+  "etkilenen_coinler": ["BTC", "ETH"] gibi liste
+}}
+
+Haber başlığı: {baslik}"""
+            }]
+        }
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=15
+        )
+        if r.status_code == 200:
+            icerik = r.json()["content"][0]["text"].strip()
+            # JSON temizle
+            icerik = icerik.replace("```json", "").replace("```", "").strip()
+            return json.loads(icerik)
+    except Exception as e:
+        print(f"[HABER] AI analiz hatasi: {e}")
+    return None
+
+
+def _haber_mesaj_olustur(baslik, link, kaynak, analiz):
+    """Telegram mesajı oluştur."""
+    if analiz:
+        etki     = analiz.get("etki", "Nötr")
+        ozet     = analiz.get("ozet", "")
+        coinler  = ", ".join(analiz.get("etkilenen_coinler", []))
+        etki_emoji = "🟢" if etki == "Pozitif" else "🔴" if etki == "Negatif" else "⚪"
+
+        msg = (
+            f"📰 <b>ÖNEMLİ HABER</b>\n\n"
+            f"{etki_emoji} <b>Piyasa Etkisi:</b> {etki}\n\n"
+            f"📌 <b>{baslik}</b>\n\n"
+            f"📝 <b>Özet:</b> {ozet}\n"
+        )
+        if coinler:
+            msg += f"⚡ <b>Etkilenen:</b> {coinler}\n"
+        msg += f"\n🔗 <a href='{link}'>Haberi Oku</a> — {kaynak}"
+    else:
+        msg = (
+            f"📰 <b>ÖNEMLİ HABER</b>\n\n"
+            f"📌 <b>{baslik}</b>\n\n"
+            f"🔗 <a href='{link}'>Haberi Oku</a> — {kaynak}"
+        )
+    return msg
+
+
+def _haber_kontrol():
+    """RSS feed'leri kontrol et, önemli haberleri gönder."""
+    global HABER_GONDERILENLER
+    yeni_haber_sayisi = 0
+
+    for kaynak_adi, rss_url in RSS_KAYNAKLAR:
+        haberler = _haber_rss_cek(rss_url)
+        for haber in haberler:
+            haber_id = haber["link"]
+            if haber_id in HABER_GONDERILENLER:
+                continue
+            if not _haber_onemli_mi(haber["baslik"], haber.get("desc", "")):
+                continue
+
+            print(f"[HABER] Onemli haber: {haber['baslik'][:60]}...")
+            analiz = _haber_etki_analiz(haber["baslik"])
+            mesaj  = _haber_mesaj_olustur(haber["baslik"], haber["link"], kaynak_adi, analiz)
+
+            # Kanala ve topic'e gönder
+            _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
+            _telegram_topic_mesaj_gonder(TOPIC_HABER, mesaj)
+
+            HABER_GONDERILENLER.add(haber_id)
+            yeni_haber_sayisi += 1
+            time.sleep(2)  # Flood önleme
+
+    # Bellek temizliği — 500'den fazla ID varsa eskilerini sil
+    if len(HABER_GONDERILENLER) > 500:
+        HABER_GONDERILENLER = set(list(HABER_GONDERILENLER)[-250:])
+
+    print(f"[HABER] Kontrol tamamlandi. {yeni_haber_sayisi} yeni haber gonderildi.")
+
+
+def _haber_zamanlayici():
+    """Her 15 dakikada bir haberleri kontrol et."""
+    import datetime as dt_mod
+    print("[HABER] Zamanlayici basladi.")
+    time.sleep(30)  # Bot tam başlasın diye kısa bekleme
+    while True:
+        try:
+            _haber_kontrol()
+            time.sleep(15 * 60)  # 15 dakika
+        except Exception as e:
+            print(f"[HABER] Zamanlayici hata: {e}")
+            time.sleep(60)
+
+
 def _trend_btc_dominans():
     """BTC dominansını MEXC ticker'dan hesapla — CoinGecko Railway'de bloklu."""
     try:
@@ -2584,6 +2752,7 @@ threading.Thread(target=_whale_kontrol, daemon=True).start()
 threading.Thread(target=_tarayici_zamanlayici, daemon=True).start()
 threading.Thread(target=_trend_zamanlayici, daemon=True).start()
 threading.Thread(target=_ls_zamanlayici, daemon=True).start()
+threading.Thread(target=_haber_zamanlayici, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
