@@ -1231,6 +1231,8 @@ def webhook():
                                 satirlar.append(f"❌ {adres[:10]}...: {str(e)[:60]}")
                         _telegram_topic_mesaj_gonder(TOPIC_BALINA, "\n".join(satirlar))
                     threading.Thread(target=_hl_test, daemon=True).start()
+
+            elif text.startswith("/haber"):
                 if chat_id in yetkili and thread_id == TOPIC_HABER:
                     print(f"[KOMUT] /haber islendi.")
                     threading.Thread(target=_haber_kontrol, daemon=True).start()
@@ -1704,6 +1706,169 @@ def _oi_zamanlayici():
             time.sleep(WHALE_OI_INTERVAL * 60)
         except Exception as e:
             print(f"[OI] Zamanlayici hata: {e}")
+            time.sleep(60)
+
+
+# ==========================================
+# HYPERLİQUID BALINA CÜZDAN TAKİBİ
+# ==========================================
+
+HL_CUZDANLAR = {
+    "0x08c14b32c8a48894e4b933090ebcc9ce33b21135": "Balina 1",
+    "0x3ee505ba316879d246a8fd2b3d7ee63b51b44fab": "Balina 2",
+    "0x2cd991f48ba31536a96b772536a1daaaedf150ae": "Balina 3",
+    "0xcc221419e754b43b2b5a9482909d8892ef70c838": "Balina 4",
+    "0x41f9ae0b64a0ec4adc788ee5c82d4b824f839017": "Balina 5",
+}
+
+HL_MIN_USD     = float(os.getenv("HL_MIN_USD", "100000"))   # Min $100K pozisyon
+HL_INTERVAL    = int(os.getenv("HL_INTERVAL",  "5"))        # Dakika
+_hl_onceki     = {}  # {adres: {coin: {szi, entryPx, unrealizedPnl}}}
+
+
+def _hl_pozisyon_cek(adres):
+    """Hyperliquid'dan cüzdanın açık pozisyonlarını çek."""
+    try:
+        r = requests.post(
+            "https://api.hyperliquid.xyz/info",
+            json={"type": "clearinghouseState", "user": adres},
+            headers={"Content-Type": "application/json"},
+            timeout=8
+        )
+        if r.status_code == 200:
+            data = r.json()
+            pozlar = {}
+            for p in data.get("assetPositions", []):
+                pos  = p.get("position", {})
+                coin = pos.get("coin", "")
+                szi  = float(pos.get("szi", 0))
+                if szi == 0:
+                    continue
+                entry_px    = float(pos.get("entryPx") or 0)
+                unrealized  = float(pos.get("unrealizedPnl") or 0)
+                pozlar[coin] = {
+                    "szi":          szi,
+                    "entryPx":      entry_px,
+                    "unrealizedPnl": unrealized,
+                }
+            return pozlar
+    except Exception as e:
+        print(f"[HL] {adres[:10]} cekme hatasi: {e}")
+    return None
+
+
+def _hl_mesaj_olustur(isim, adres, coin, olay, szi, entry_px, pnl=None, onceki_szi=None):
+    """Hyperliquid pozisyon değişikliği bildirimi."""
+    yon      = "🟢 LONG" if szi > 0 else "🔴 SHORT"
+    szi_abs  = abs(szi)
+    usd_deger = szi_abs * entry_px if entry_px > 0 else 0
+
+    if usd_deger >= 1e9:
+        usd_str = f"${usd_deger/1e9:.2f}B"
+    elif usd_deger >= 1e6:
+        usd_str = f"${usd_deger/1e6:.1f}M"
+    else:
+        usd_str = f"${usd_deger:,.0f}"
+
+    if olay == "ACILDI":
+        baslik = f"🐋 <b>YENİ POZİSYON — {isim}</b>"
+    elif olay == "KAPATILDI":
+        baslik = f"🚪 <b>POZİSYON KAPATILDI — {isim}</b>"
+    else:
+        baslik = f"📊 <b>POZİSYON DEĞİŞTİ — {isim}</b>"
+
+    if TR_TZ:
+        zaman_str = datetime.now(tz=TR_TZ).strftime("%H:%M")
+    else:
+        zaman_str = datetime.utcnow().strftime("%H:%M UTC")
+
+    mesaj = (
+        f"{baslik}\n\n"
+        f"🏦 Hyperliquid Futures\n"
+        f"📊 <b>{coin}/USDC</b>\n"
+        f"{yon}\n"
+        f"💰 Boyut: {szi_abs:,.4f} {coin} ({usd_str})\n"
+        f"📌 Giriş Fiyatı: ${entry_px:,.4f}\n"
+    )
+    if pnl is not None and olay != "ACILDI":
+        pnl_emoji = "✅" if pnl >= 0 else "❌"
+        mesaj += f"{pnl_emoji} Gerçekleşmemiş PnL: ${pnl:,.2f}\n"
+    if onceki_szi is not None and olay == "DEGISTI":
+        mesaj += f"📈 Önceki Boyut: {abs(onceki_szi):,.4f} {coin}\n"
+    mesaj += f"\n🔗 <code>{adres[:20]}...</code>\n⏱ {zaman_str}"
+    return mesaj
+
+
+def _hl_kontrol():
+    """Tüm cüzdanları kontrol et, değişiklikleri bildir."""
+    global _hl_onceki
+
+    for adres, isim in HL_CUZDANLAR.items():
+        try:
+            yeni_pozlar = _hl_pozisyon_cek(adres)
+            if yeni_pozlar is None:
+                continue
+
+            onceki_pozlar = _hl_onceki.get(adres, {})
+
+            # İlk çalışma — sadece kaydet, bildirim gönderme
+            if adres not in _hl_onceki:
+                _hl_onceki[adres] = yeni_pozlar
+                print(f"[HL] {isim}: {len(yeni_pozlar)} pozisyon kaydedildi.")
+                continue
+
+            # Yeni açılan pozisyonlar
+            for coin, yeni in yeni_pozlar.items():
+                usd = abs(yeni["szi"]) * yeni["entryPx"]
+                if usd < HL_MIN_USD:
+                    continue
+
+                if coin not in onceki_pozlar:
+                    mesaj = _hl_mesaj_olustur(isim, adres, coin, "ACILDI",
+                                               yeni["szi"], yeni["entryPx"])
+                    _telegram_topic_mesaj_gonder(TOPIC_BALINA, mesaj)
+                    print(f"[HL] {isim} YENİ: {coin} {yeni['szi']} @ {yeni['entryPx']}")
+
+                else:
+                    # Boyut önemli ölçüde değiştiyse (%20+)
+                    onceki = onceki_pozlar[coin]
+                    if onceki["szi"] != 0:
+                        degisim_pct = abs(yeni["szi"] - onceki["szi"]) / abs(onceki["szi"]) * 100
+                        if degisim_pct >= 20:
+                            mesaj = _hl_mesaj_olustur(isim, adres, coin, "DEGISTI",
+                                                       yeni["szi"], yeni["entryPx"],
+                                                       yeni["unrealizedPnl"], onceki["szi"])
+                            _telegram_topic_mesaj_gonder(TOPIC_BALINA, mesaj)
+                            print(f"[HL] {isim} DEĞİŞTİ: {coin} {onceki['szi']}→{yeni['szi']}")
+
+            # Kapatılan pozisyonlar
+            for coin, onceki in onceki_pozlar.items():
+                if coin not in yeni_pozlar:
+                    usd = abs(onceki["szi"]) * onceki["entryPx"]
+                    if usd < HL_MIN_USD:
+                        continue
+                    mesaj = _hl_mesaj_olustur(isim, adres, coin, "KAPATILDI",
+                                               onceki["szi"], onceki["entryPx"],
+                                               onceki["unrealizedPnl"])
+                    _telegram_topic_mesaj_gonder(TOPIC_BALINA, mesaj)
+                    print(f"[HL] {isim} KAPANDI: {coin}")
+
+            _hl_onceki[adres] = yeni_pozlar
+
+        except Exception as e:
+            print(f"[HL] {isim} kontrol hatasi: {e}")
+
+
+def _hl_zamanlayici():
+    """Her HL_INTERVAL dakikada bir cüzdanları kontrol et."""
+    print(f"[HL] Zamanlayici basladi. {len(HL_CUZDANLAR)} cüzdan izleniyor. Interval: {HL_INTERVAL} dk.")
+    time.sleep(30)  # Başlangıçta bekle
+    while True:
+        try:
+            _hl_kontrol()
+            time.sleep(HL_INTERVAL * 60)
+        except Exception as e:
+            print(f"[HL] Zamanlayici hata: {e}")
             time.sleep(60)
 
 
@@ -2725,6 +2890,7 @@ threading.Thread(target=_ls_zamanlayici, daemon=True).start()
 threading.Thread(target=_haber_zamanlayici, daemon=True).start()
 threading.Thread(target=_oi_zamanlayici, daemon=True).start()
 threading.Thread(target=_istatistik_zamanlayici, daemon=True).start()
+threading.Thread(target=_hl_zamanlayici, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
