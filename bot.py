@@ -661,6 +661,39 @@ def istatistik_mesaji():
         key=lambda x: x[1], default=("", -1)
     )
 
+    # Tüm zamanlar en başarılı sembol (min 5 sinyal)
+    with gunluk_kilit:
+        tum_kayitlar = list(gunluk_sinyaller)
+
+    sym_stats_t = {}
+    for s in tum_kayitlar:
+        sym = sembol_grup(s["symbol"])
+        if sym not in sym_stats_t:
+            sym_stats_t[sym] = {"toplam": 0, "basarili": 0}
+        sym_stats_t[sym]["toplam"] += 1
+        if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
+            sym_stats_t[sym]["basarili"] += 1
+
+    en_sym_t = max(
+        ((sym, st["basarili"]/st["toplam"]*100) for sym, st in sym_stats_t.items() if st["toplam"] >= 5),
+        key=lambda x: x[1], default=("", -1)
+    )
+
+    # Tüm zamanlar en başarılı zaman dilimi (min 5 sinyal)
+    tf_stats_t = {}
+    for s in tum_kayitlar:
+        tf = s.get("timeframe","?")
+        if tf not in tf_stats_t:
+            tf_stats_t[tf] = {"toplam": 0, "basarili": 0}
+        tf_stats_t[tf]["toplam"] += 1
+        if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
+            tf_stats_t[tf]["basarili"] += 1
+
+    en_tf_t = max(
+        ((tf_map_g.get(tf,tf), st["basarili"]/st["toplam"]*100) for tf, st in tf_stats_t.items() if st["toplam"] >= 5),
+        key=lambda x: x[1], default=("", -1)
+    )
+
     mesaj = (
         f"📊 <b>BEN KÜL YUTMAM — İstatistik</b>\n\n"
         f"<b>— Bugün ({bugun}) —</b>\n"
@@ -679,8 +712,12 @@ def istatistik_mesaji():
         f"📨 Toplam Sinyal: <b>{t['toplam']}</b>  (🚀 {t['long']} Long | 📉 {t['short']} Short)\n"
         f"✅ TP Başarılı: <b>{t['tp_basarili']}</b>\n"
         f"⛔ SL Tetiklenen: <b>{t['sl_tetiklenen']}</b>\n"
-        f"🏆 Başarı Oranı: <b>%{t['basari_oran']}</b> ({t['tp_basarili']}/{t['toplam']})"
+        f"🏆 Başarı Oranı: <b>%{t['basari_oran']}</b> ({t['tp_basarili']}/{t['toplam']})\n"
     )
+    if en_sym_t[0]:
+        mesaj += f"🥇 En Başarılı Sembol: <b>{en_sym_t[0]}</b> (%{round(en_sym_t[1],1)})\n"
+    if en_tf_t[0]:
+        mesaj += f"⏱ En Başarılı Zaman Dilimi: <b>{en_tf_t[0]}</b> (%{round(en_tf_t[1],1)})\n"
     return mesaj
 
 
@@ -2140,7 +2177,32 @@ def _haber_zamanlayici():
             time.sleep(60)
 
 
-def _trend_btc_dominans():
+def _istatistik_zamanlayici():
+    """Her saat başında istatistik + günlük rapor görseli gönder."""
+    import datetime as dt_mod
+    print("[ISTATISTIK] Zamanlayici basladi.")
+    while True:
+        try:
+            if TR_TZ:
+                simdi = datetime.now(tz=TR_TZ)
+            else:
+                simdi = datetime.utcnow()
+            sonraki = (simdi.replace(minute=0, second=0, microsecond=0)
+                       + dt_mod.timedelta(hours=1))
+            bekle = (sonraki - simdi).total_seconds()
+            print(f"[ISTATISTIK] Sonraki: {sonraki.strftime('%H:%M')} ({int(bekle//60)} dk sonra)")
+            time.sleep(bekle)
+            bugun = gun_str()
+            # 1) İstatistik metni
+            _telegram_topic_mesaj_gonder(TOPIC_RAPOR, istatistik_mesaji())
+            # 2) Günlük rapor görseli
+            img = rapor_gorsel(bugun)
+            if img:
+                _topic_foto_gonder_filigranli(TOPIC_RAPOR, img, f"Günlük Rapor — {bugun}")
+            time.sleep(10)
+        except Exception as e:
+            print(f"[ISTATISTIK] Hata: {e}")
+            time.sleep(60)
     """BTC dominansını MEXC ticker'dan hesapla — CoinGecko Railway'de bloklu."""
     try:
         r = requests.get(
@@ -2926,13 +2988,13 @@ def _trend_zamanlayici():
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 _watermark_yukle()
-threading.Thread(target=gunluk_ozet_gonder, daemon=True).start()
 threading.Thread(target=_whale_kontrol, daemon=True).start()
 threading.Thread(target=_tarayici_zamanlayici, daemon=True).start()
 threading.Thread(target=_trend_zamanlayici, daemon=True).start()
 threading.Thread(target=_ls_zamanlayici, daemon=True).start()
 threading.Thread(target=_haber_zamanlayici, daemon=True).start()
 threading.Thread(target=_oi_zamanlayici, daemon=True).start()
+threading.Thread(target=_istatistik_zamanlayici, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
