@@ -469,11 +469,9 @@ def tp_kontrol_gonder(symbol, sinyal, timeframe, tp1, tp2, tp3, tp4, tp5, sl,
         return msg
 
     def bildirim_gonder(msg):
-        resp = _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, msg, reply_to=message_id)
-        if resp and resp.status_code == 200:
-            print(f"[TP] {symbol} bildirim gonderildi.")
         _telegram_topic_mesaj_gonder(TOPIC_ALARM, msg)
-        if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != TELEGRAM_CHAT_ID:
+        print(f"[TP] {symbol} bildirim gonderildi.")
+        if TELEGRAM_LOG_ID:
             _telegram_mesaj_gonder(TELEGRAM_LOG_ID, msg)
 
     kontrol_araligi           = 60
@@ -547,16 +545,11 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal,
         img_data = get_screenshot_chartimg(symbol, timeframe)
 
     message_id = None
+    # Sadece gruba gönder — 🔔 İndikatör Alarmları topic'i
     if img_data:
-        resp = _telegram_foto_gonder(TELEGRAM_CHAT_ID, img_data, caption)
+        resp = _telegram_topic_foto_gonder(TOPIC_ALARM, img_data, caption)
     else:
-        resp = _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, caption)
-
-    # Gruba da gönder — 🔔 İndikatör Alarmları topic'i
-    if img_data:
-        _telegram_topic_foto_gonder(TOPIC_ALARM, img_data, caption)
-    else:
-        _telegram_topic_mesaj_gonder(TOPIC_ALARM, caption)
+        resp = _telegram_topic_mesaj_gonder(TOPIC_ALARM, caption)
 
     if resp and resp.status_code == 200:
         message_id = resp.json().get("result", {}).get("message_id")
@@ -1056,17 +1049,14 @@ def _ozet_gonder():
     bugun = gun_str()
     print(f"[OZET] Istatistik ve rapor gonderiliyor. gun={bugun}")
 
-    # 1) İstatistik mesajı
-    _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, istatistik_mesaji())
+    # 1) İstatistik mesajı — sadece gruba
     _telegram_topic_mesaj_gonder(TOPIC_RAPOR, istatistik_mesaji())
 
-    # 2) Görsel rapor
+    # 2) Görsel rapor — sadece gruba
     img = rapor_gorsel(bugun)
     if img:
-        _telegram_foto_gonder_filigranli(TELEGRAM_CHAT_ID, img, f"Günlük Rapor — {bugun}")
         _topic_foto_gonder_filigranli(TOPIC_RAPOR, img, f"Günlük Rapor — {bugun}")
     else:
-        _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, rapor_mesaji(bugun))
         _telegram_topic_mesaj_gonder(TOPIC_RAPOR, rapor_mesaji(bugun))
 
     b = istatistik_hesapla(gun_filtre=bugun)
@@ -1137,91 +1127,60 @@ def webhook():
     try:
         data = json.loads(raw)
         if isinstance(data, dict) and ("message" in data or "channel_post" in data):
-            msg     = data.get("message") or data.get("channel_post")
-            text    = msg.get("text", "").strip().lower()
-            chat_id = str(msg.get("chat", {}).get("id", ""))
-            yetkili = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
+            msg       = data.get("message") or data.get("channel_post")
+            text      = msg.get("text", "").strip().lower()
+            chat_id   = str(msg.get("chat", {}).get("id", ""))
+            thread_id = msg.get("message_thread_id")  # Hangi topic'ten geldi
+            yetkili   = [x for x in [TELEGRAM_CHAT_ID, TELEGRAM_LOG_ID] if x]
+
             if text.startswith("/istatistik"):
-                if chat_id in yetkili:
-                    _telegram_mesaj_gonder(chat_id, istatistik_mesaji())
-                    print(f"[KOMUT] /istatistik islendi. chat_id={chat_id}")
-                else:
-                    print(f"[KOMUT] /istatistik yetkisiz. chat_id={chat_id} yetkili={yetkili}")
+                if chat_id in yetkili and thread_id == TOPIC_RAPOR:
+                    _telegram_topic_mesaj_gonder(TOPIC_RAPOR, istatistik_mesaji())
+                    print(f"[KOMUT] /istatistik islendi.")
+
             elif text.startswith("/rapor"):
-                if chat_id in yetkili:
+                if chat_id in yetkili and thread_id == TOPIC_RAPOR:
                     gun = gun_str()
-                    print(f"[KOMUT] /rapor basliyor. gun={gun} chat_id={chat_id}")
+                    print(f"[KOMUT] /rapor basliyor. gun={gun}")
                     img = rapor_gorsel(gun)
                     if img:
-                        _telegram_foto_gonder_filigranli(chat_id, img, f"Günlük Rapor — {gun}")
+                        _topic_foto_gonder_filigranli(TOPIC_RAPOR, img, f"Günlük Rapor — {gun}")
                         print(f"[KOMUT] /rapor gorsel gonderildi.")
                     else:
-                        _telegram_mesaj_gonder(chat_id, rapor_mesaji(gun))
-                        print(f"[KOMUT] /rapor metin gonderildi.")
-                else:
-                    print(f"[KOMUT] /rapor yetkisiz. chat_id={chat_id} yetkili={yetkili}")
+                        _telegram_topic_mesaj_gonder(TOPIC_RAPOR, rapor_mesaji(gun))
+
             elif text.startswith("/tarayici"):
-                if chat_id in yetkili:
-                    print(f"[KOMUT] /tarayici islendi. chat_id={chat_id}")
+                if chat_id in yetkili and thread_id == TOPIC_YUKSELENLER:
+                    print(f"[KOMUT] /tarayici islendi.")
                     threading.Thread(target=_tarayici_gonder, daemon=True).start()
-                else:
-                    print(f"[KOMUT] /tarayici yetkisiz. chat_id={chat_id}")
 
             elif text.startswith("/ls"):
-                if chat_id in yetkili:
-                    print(f"[KOMUT] /ls islendi. chat_id={chat_id}")
-                    threading.Thread(target=lambda: _ls_gonder(chat_id), daemon=True).start()
-                else:
-                    print(f"[KOMUT] /ls yetkisiz. chat_id={chat_id}")
+                if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
+                    print(f"[KOMUT] /ls islendi.")
+                    threading.Thread(target=lambda: _ls_gonder(), daemon=True).start()
 
             elif text.startswith("/trend"):
-                if chat_id in yetkili:
-                    print(f"[KOMUT] /trend islendi. chat_id={chat_id}")
-                    threading.Thread(target=lambda: _trend_gonder(chat_id), daemon=True).start()
-                else:
-                    print(f"[KOMUT] /trend yetkisiz. chat_id={chat_id}")
+                if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
+                    print(f"[KOMUT] /trend islendi.")
+                    threading.Thread(target=lambda: _trend_gonder(), daemon=True).start()
 
             elif text.startswith("/balina"):
-                if chat_id in yetkili:
-                    print(f"[KOMUT] /balina islendi. chat_id={chat_id}")
-                    def _balina_manuel(cid):
-                        bulunan_sayac = 0
-                        for sym in WHALE_SYMBOLS:
-                            deals = _whale_fetch(sym)
-                            if not deals:
-                                continue
-                            # Her sembol için en büyük işlemi bul
-                            en_buyuk = None
-                            for deal in deals[:50]:
-                                fiyat  = float(deal.get("p", 0))
-                                miktar = float(deal.get("v", 0))
-                                tutar  = fiyat * miktar
-                                if tutar >= WHALE_LIMIT_USD:
-                                    if en_buyuk is None or tutar > float(en_buyuk.get("p",0)) * float(en_buyuk.get("v",0)):
-                                        en_buyuk = deal
-                            if en_buyuk:
-                                fiyat     = float(en_buyuk.get("p", 0))
-                                miktar    = float(en_buyuk.get("v", 0))
-                                tutar     = fiyat * miktar
-                                ts_ms     = en_buyuk.get("time", 0)
-                                taraf     = en_buyuk.get("T", 1)
-                                yon       = "ALIM" if taraf == 1 else "SATIM"
-                                zaman_str = _whale_fmt_zaman(ts_ms)
-                                mesaj     = _whale_mesaj(sym, yon, tutar, miktar, fiyat, zaman_str)
-                                _telegram_mesaj_gonder(cid, mesaj)
-                                bulunan_sayac += 1
-                        if bulunan_sayac == 0:
-                            _telegram_mesaj_gonder(cid,
-                                "🐋 Balina izleme aktif.\n"
-                                f"Limit: ${WHALE_LIMIT_USD:,.0f}\n"
-                                f"Taranan: {', '.join(WHALE_SYMBOLS)}\n"
-                                "Son işlemlerde eşiği aşan hareket bulunamadı."
-                            )
-                    threading.Thread(target=_balina_manuel, args=(chat_id,), daemon=True).start()
-                else:
-                    print(f"[KOMUT] /balina yetkisiz. chat_id={chat_id}")
+                if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
+                    print(f"[KOMUT] /balina islendi.")
+                    threading.Thread(target=_balina_gonder, daemon=True).start()
+
+            elif text.startswith("/haber"):
+                if chat_id in yetkili and thread_id == TOPIC_HABER:
+                    print(f"[KOMUT] /haber islendi.")
+                    threading.Thread(target=_haber_kontrol, daemon=True).start()
+
+            elif text.startswith("/rapor"):
+                pass  # Yukarıda ele alındı
+
             else:
-                print(f"[KOMUT] Bilinmeyen komut: {text[:50]}")
+                if text.startswith("/"):
+                    print(f"[KOMUT] Bilinmeyen komut veya yanlis topic: {text}")
+
             return jsonify({"status": "ok"}), 200
     except Exception as e:
         print(f"[KOMUT-HATA] {e}")
@@ -1298,6 +1257,39 @@ WHALE_POLL_SEC    = 3    # kaç saniyede bir kontrol et
 
 _whale_last_ts    = {}   # son görülen işlem timestamp'i per symbol
 _whale_last_bildirim = {}  # son bildirim zamanı per symbol (ms)
+
+def _balina_gonder():
+    """Manuel /balina komutu — son büyük işlemleri TOPIC_ANALIZ'e gönder."""
+    bulunan = 0
+    for sym in WHALE_SYMBOLS:
+        deals = _whale_fetch(sym)
+        if not deals:
+            continue
+        en_buyuk = None
+        for deal in deals[:50]:
+            fiyat  = float(deal.get("p", 0))
+            miktar = float(deal.get("v", 0))
+            tutar  = fiyat * miktar
+            if tutar >= WHALE_LIMIT_USD:
+                if en_buyuk is None or tutar > float(en_buyuk.get("p",0)) * float(en_buyuk.get("v",0)):
+                    en_buyuk = deal
+        if en_buyuk:
+            fiyat     = float(en_buyuk.get("p", 0))
+            miktar    = float(en_buyuk.get("v", 0))
+            tutar     = fiyat * miktar
+            ts_ms     = _whale_get_ts(en_buyuk)
+            taraf     = en_buyuk.get("T", 1)
+            yon       = "ALIM" if taraf == 1 else "SATIM"
+            zaman_str = _whale_fmt_zaman(ts_ms)
+            mesaj     = _whale_mesaj(sym, yon, tutar, miktar, fiyat, zaman_str)
+            _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, mesaj)
+            bulunan += 1
+    if bulunan == 0:
+        _telegram_topic_mesaj_gonder(TOPIC_ANALIZ,
+            f"🐋 Balina izleme aktif.\nLimit: ${WHALE_LIMIT_USD:,.0f}\n"
+            f"Taranan: {', '.join(WHALE_SYMBOLS)}\n"
+            "Son işlemlerde eşiği aşan hareket bulunamadı.")
+
 
 def _whale_fmt_zaman(ts_ms):
     # MEXC bazen saniye bazen milisaniye döndürür
@@ -1476,7 +1468,6 @@ def _whale_kontrol():
                     zaman_str = _whale_fmt_zaman(ts_ms)
                     mesaj     = _whale_mesaj(sym, yon, tutar, miktar, fiyat, zaman_str)
 
-                    _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
                     _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, mesaj)
                     _whale_last_bildirim[sym] = time.time() * 1000
                     print(f"[WHALE] BILDIRIM: {sym} {yon} ${tutar:,.0f} @ {fiyat}")
@@ -1592,7 +1583,6 @@ def _tarayici_gonder():
         zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
 
     mesaj = _tarayici_mesaj(yukselenler, dusenler, zaman_str)
-    _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
     _telegram_topic_mesaj_gonder(TOPIC_YUKSELENLER, mesaj)
     print(f"[TARAYICI] Gonderildi. Top {TARAYICI_TOP_N} yukselenler/dusenler.")
 
@@ -1794,6 +1784,8 @@ def _trend_fg_renk(deger):
 # HABER SİSTEMİ
 # ==========================================
 
+HABER_TARAMA_SURESI = int(os.getenv("HABER_TARAMA_SURESI", "15"))  # dakika
+
 HABER_COINLER = [
     "bitcoin", "btc", "ethereum", "eth", "bnb", "binance",
     "solana", "sol", "xrp", "ripple", "dogecoin", "doge",
@@ -1849,18 +1841,19 @@ def _haber_onemli_mi(baslik, desc=""):
 
 
 def _haber_etki_analiz(baslik):
-    """Claude API ile Türkçe özet + piyasa etkisi üret."""
+    """Claude API ile Türkçe başlık + özet + piyasa etkisi üret."""
     try:
         payload = {
             "model": "claude-sonnet-4-20250514",
             "max_tokens": 300,
             "messages": [{
                 "role": "user",
-                "content": f"""Aşağıdaki kripto haber başlığını analiz et. 
+                "content": f"""Aşağıdaki kripto haber başlığını analiz et.
 SADECE JSON formatında yanıt ver, başka hiçbir şey yazma:
 
 {{
-  "ozet": "Türkçe 1-2 cümle özet",
+  "baslik_tr": "Haberin Türkçe başlığı",
+  "ozet": "Türkçe 2-3 cümle özet",
   "etki": "Pozitif" veya "Negatif" veya "Nötr",
   "etkilenen_coinler": ["BTC", "ETH"] gibi liste
 }}
@@ -1876,7 +1869,6 @@ Haber başlığı: {baslik}"""
         )
         if r.status_code == 200:
             icerik = r.json()["content"][0]["text"].strip()
-            # JSON temizle
             icerik = icerik.replace("```json", "").replace("```", "").strip()
             return json.loads(icerik)
     except Exception as e:
@@ -1885,27 +1877,28 @@ Haber başlığı: {baslik}"""
 
 
 def _haber_mesaj_olustur(baslik, link, kaynak, analiz):
-    """Telegram mesajı oluştur."""
+    """Telegram mesajı oluştur — Türkçe başlık, özet, link yok."""
     if analiz:
-        etki     = analiz.get("etki", "Nötr")
-        ozet     = analiz.get("ozet", "")
-        coinler  = ", ".join(analiz.get("etkilenen_coinler", []))
-        etki_emoji = "🟢" if etki == "Pozitif" else "🔴" if etki == "Negatif" else "⚪"
+        etki         = analiz.get("etki", "Nötr")
+        baslik_tr    = analiz.get("baslik_tr", baslik)
+        ozet         = analiz.get("ozet", "")
+        coinler      = ", ".join(analiz.get("etkilenen_coinler", []))
+        etki_emoji   = "🟢" if etki == "Pozitif" else "🔴" if etki == "Negatif" else "⚪"
 
         msg = (
             f"📰 <b>ÖNEMLİ HABER</b>\n\n"
             f"{etki_emoji} <b>Piyasa Etkisi:</b> {etki}\n\n"
-            f"📌 <b>{baslik}</b>\n\n"
-            f"📝 <b>Özet:</b> {ozet}\n"
+            f"📌 <b>{baslik_tr}</b>\n\n"
+            f"📝 {ozet}\n"
         )
         if coinler:
-            msg += f"⚡ <b>Etkilenen:</b> {coinler}\n"
-        msg += f"\n🔗 <a href='{link}'>Haberi Oku</a> — {kaynak}"
+            msg += f"\n⚡ <b>Etkilenen:</b> {coinler}"
+        msg += f"\n\n<i>Kaynak: {kaynak}</i>"
     else:
         msg = (
             f"📰 <b>ÖNEMLİ HABER</b>\n\n"
             f"📌 <b>{baslik}</b>\n\n"
-            f"🔗 <a href='{link}'>Haberi Oku</a> — {kaynak}"
+            f"<i>Kaynak: {kaynak}</i>"
         )
     return msg
 
@@ -1928,8 +1921,7 @@ def _haber_kontrol():
             analiz = _haber_etki_analiz(haber["baslik"])
             mesaj  = _haber_mesaj_olustur(haber["baslik"], haber["link"], kaynak_adi, analiz)
 
-            # Kanala ve topic'e gönder
-            _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, mesaj)
+            # Sadece gruba gönder
             _telegram_topic_mesaj_gonder(TOPIC_HABER, mesaj)
 
             HABER_GONDERILENLER.add(haber_id)
@@ -1944,14 +1936,13 @@ def _haber_kontrol():
 
 
 def _haber_zamanlayici():
-    """Her 15 dakikada bir haberleri kontrol et."""
-    import datetime as dt_mod
-    print("[HABER] Zamanlayici basladi.")
-    time.sleep(30)  # Bot tam başlasın diye kısa bekleme
+    """Her HABER_TARAMA_SURESI dakikada bir haberleri kontrol et."""
+    print(f"[HABER] Zamanlayici basladi. Tarama suresi: {HABER_TARAMA_SURESI} dakika.")
+    time.sleep(30)
     while True:
         try:
             _haber_kontrol()
-            time.sleep(15 * 60)  # 15 dakika
+            time.sleep(HABER_TARAMA_SURESI * 60)
         except Exception as e:
             print(f"[HABER] Zamanlayici hata: {e}")
             time.sleep(60)
@@ -2208,7 +2199,7 @@ def _ls_yorum(btc_ls, eth_ls):
     return "\n".join(satirlar)
 
 
-def _ls_gonder(chat_id=None):
+def _ls_gonder(chat_id=None):  # chat_id artık kullanılmıyor
     """L/S grafiği + yorum gönder."""
     hedef = chat_id or TELEGRAM_CHAT_ID
     if TR_TZ:
@@ -2220,22 +2211,20 @@ def _ls_gonder(chat_id=None):
     btc_ls = _ls_veri_cek("BTCUSDT", 24)
     eth_ls = _ls_veri_cek("ETHUSDT", 24)
 
-    # 1) Görsel
+    # 1) Görsel — sadece gruba
     img = _ls_gorsel(btc_ls, eth_ls, zaman_str)
     if img:
-        _telegram_foto_gonder_filigranli(hedef, img, f"📈 Long/Short Oran — 1S — {zaman_str}")
         _topic_foto_gonder_filigranli(TOPIC_ANALIZ, img, f"📈 Long/Short Oran — 1S — {zaman_str}")
         print(f"[LS] Gorsel gonderildi.")
     else:
-        _telegram_mesaj_gonder(hedef, "⚠️ L/S verisi alınamadı.")
+        _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, "⚠️ L/S verisi alınamadı.")
         return
 
-    # 2) Otomatik yorum
+    # 2) Otomatik yorum — sadece gruba
     yorum = _ls_yorum(btc_ls, eth_ls)
-    _telegram_mesaj_gonder(hedef, yorum)
     _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, yorum)
 
-    if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != hedef:
+    if TELEGRAM_LOG_ID:
         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, yorum)
 
     print(f"[LS] Tamamlandi.")
@@ -2691,20 +2680,18 @@ def _trend_gonder(chat_id=None):
     else:
         zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
 
-    # 1) Trend görseli
+    # 1) Trend görseli — sadece gruba
     img = _trend_gorsel(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
     if img:
-        _telegram_foto_gonder_filigranli(hedef, img, f"📊 Trend Analizi — {zaman_str}")
         _topic_foto_gonder_filigranli(TOPIC_ANALIZ, img, f"📊 Trend Analizi — {zaman_str}")
     else:
-        print("[TREND] Gorsel uretilmedi, sadece metin gonderiliyor.")
+        print("[TREND] Gorsel uretilmedi.")
 
-    # 2) Metin özeti
+    # 2) Metin özeti — sadece gruba
     metin = _trend_metin(sonuclar, btc_dom, eth_dom, total_mcap, mcap_change, fg_deger, fg_sinif, zaman_str)
-    _telegram_mesaj_gonder(hedef, metin)
     _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, metin)
 
-    if TELEGRAM_LOG_ID and TELEGRAM_LOG_ID != hedef:
+    if TELEGRAM_LOG_ID:
         _telegram_mesaj_gonder(TELEGRAM_LOG_ID, metin)
 
     print(f"[TREND] Gonderildi. {len(sonuclar)} coin analiz edildi.")
