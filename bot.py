@@ -1243,39 +1243,65 @@ def webhook():
                 if chat_id in yetkili and thread_id == TOPIC_BALINA:
                     print(f"[KOMUT] /hl_durum islendi.")
                     def _hl_durum_gonder():
+                        if TR_TZ:
+                            zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
+                        else:
+                            zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
+                        ayrac = "─" * 28
                         for adres, isim in HL_CUZDANLAR.items():
                             try:
                                 pozlar = _hl_pozisyon_cek(adres)
                                 if pozlar is None:
-                                    _telegram_topic_mesaj_gonder(TOPIC_BALINA, f"⚠️ {isim}: Veri alınamadı.")
                                     continue
                                 if not pozlar:
-                                    _telegram_topic_mesaj_gonder(TOPIC_BALINA, f"📭 {isim}: Açık pozisyon yok.")
                                     continue
-                                if TR_TZ:
-                                    zaman_str = datetime.now(tz=TR_TZ).strftime("%H:%M")
-                                else:
-                                    zaman_str = datetime.utcnow().strftime("%H:%M UTC")
-                                satirlar = [f"📊 <b>{isim} — Güncel Pozisyonlar</b>\n🔗 <code>{adres[:20]}...</code>\n"]
-                                for coin, p in pozlar.items():
+
+                                # Sadece HL_MIN_USD üzeri pozisyonlar
+                                buyuk = {c: p for c, p in pozlar.items()
+                                         if abs(p["szi"]) * p["entryPx"] >= HL_MIN_USD}
+                                if not buyuk:
+                                    continue
+
+                                # USD değerine göre sırala
+                                sirali = sorted(buyuk.items(),
+                                                key=lambda x: abs(x[1]["szi"]) * x[1]["entryPx"],
+                                                reverse=True)
+
+                                satirlar = []
+                                for coin, p in sirali:
                                     szi      = p["szi"]
                                     entry_px = p["entryPx"]
                                     pnl      = p["unrealizedPnl"]
-                                    yon      = "🟢 LONG" if szi > 0 else "🔴 SHORT"
                                     usd      = abs(szi) * entry_px
+                                    yon      = "🟢 L" if szi > 0 else "🔴 S"
                                     if usd >= 1e6:
                                         usd_str = f"${usd/1e6:.1f}M"
                                     else:
-                                        usd_str = f"${usd:,.0f}"
-                                    pnl_str  = f"{'✅' if pnl >= 0 else '❌'} ${pnl:,.0f}"
+                                        usd_str = f"${usd/1e3:.0f}K"
+                                    pnl_str  = f"+${pnl/1e3:.1f}K" if pnl >= 0 else f"-${abs(pnl)/1e3:.1f}K"
+                                    coin_pad = coin[:8].ljust(8)
+                                    # Giriş fiyatı formatı
+                                    if entry_px >= 1000:
+                                        px_str = f"${entry_px:,.0f}"
+                                    elif entry_px >= 1:
+                                        px_str = f"${entry_px:.2f}"
+                                    else:
+                                        px_str = f"${entry_px:.4f}"
                                     satirlar.append(
-                                        f"<b>{coin}</b> {yon}\n"
-                                        f"   Boyut: {abs(szi):,.4f} ({usd_str})\n"
-                                        f"   Giriş: ${entry_px:,.4f}\n"
-                                        f"   PnL: {pnl_str}"
+                                        f"{yon} {coin_pad} {usd_str:>7}  @{px_str}  PnL:{pnl_str:>9}"
                                     )
-                                satirlar.append(f"\n⏱ {zaman_str}")
-                                _telegram_topic_mesaj_gonder(TOPIC_BALINA, "\n\n".join(satirlar))
+
+                                mesaj = (
+                                    f"🐋 <b>{isim}</b>\n"
+                                    f"<code>{adres[:20]}...</code>\n"
+                                    f"🕐 {zaman_str}\n"
+                                    f"{ayrac}\n"
+                                    f"<pre>{'YÖN COİN     BOYUT   GİRİŞ        PnL':}\n"
+                                    f"{ayrac[:28]}\n"
+                                    + "\n".join(satirlar) +
+                                    f"</pre>"
+                                )
+                                _telegram_topic_mesaj_gonder(TOPIC_BALINA, mesaj)
                                 time.sleep(1)
                             except Exception as e:
                                 print(f"[HL_DURUM] {isim} hata: {e}")
@@ -1807,44 +1833,58 @@ def _hl_pozisyon_cek(adres):
 
 
 def _hl_mesaj_olustur(isim, adres, coin, olay, szi, entry_px, pnl=None, onceki_szi=None):
-    """Hyperliquid pozisyon değişikliği bildirimi."""
-    yon      = "🟢 LONG" if szi > 0 else "🔴 SHORT"
-    szi_abs  = abs(szi)
-    usd_deger = szi_abs * entry_px if entry_px > 0 else 0
+    """Hyperliquid pozisyon değişikliği bildirimi — kompakt format."""
+    yon     = "🟢 L" if szi > 0 else "🔴 S"
+    szi_abs = abs(szi)
+    usd     = szi_abs * entry_px
 
-    if usd_deger >= 1e9:
-        usd_str = f"${usd_deger/1e9:.2f}B"
-    elif usd_deger >= 1e6:
-        usd_str = f"${usd_deger/1e6:.1f}M"
+    if usd >= 1e6:
+        usd_str = f"${usd/1e6:.1f}M"
     else:
-        usd_str = f"${usd_deger:,.0f}"
+        usd_str = f"${usd/1e3:.0f}K"
+
+    if entry_px >= 1000:
+        px_str = f"${entry_px:,.0f}"
+    elif entry_px >= 1:
+        px_str = f"${entry_px:.2f}"
+    else:
+        px_str = f"${entry_px:.4f}"
+
+    pnl_str = ""
+    if pnl is not None:
+        pnl_str = f"+${pnl/1e3:.1f}K" if pnl >= 0 else f"-${abs(pnl)/1e3:.1f}K"
 
     if olay == "ACILDI":
-        baslik = f"🐋 <b>YENİ POZİSYON — {isim}</b>"
+        baslik = f"🐋 YENİ POZİSYON — {isim}"
     elif olay == "KAPATILDI":
-        baslik = f"🚪 <b>POZİSYON KAPATILDI — {isim}</b>"
+        baslik = f"🚪 POZİSYON KAPATILDI — {isim}"
     else:
-        baslik = f"📊 <b>POZİSYON DEĞİŞTİ — {isim}</b>"
+        baslik = f"📊 POZİSYON DEĞİŞTİ — {isim}"
 
     if TR_TZ:
-        zaman_str = datetime.now(tz=TR_TZ).strftime("%H:%M")
+        zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
     else:
-        zaman_str = datetime.utcnow().strftime("%H:%M UTC")
+        zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
+
+    ayrac = "─" * 28
+    coin_pad = coin[:8].ljust(8)
+    satir = f"{yon} {coin_pad} {usd_str:>7}  @{px_str}"
+    if pnl_str:
+        satir += f"  PnL:{pnl_str:>9}"
 
     mesaj = (
-        f"{baslik}\n\n"
-        f"🏦 Hyperliquid Futures\n"
-        f"📊 <b>{coin}/USDC</b>\n"
-        f"{yon}\n"
-        f"💰 Boyut: {szi_abs:,.4f} {coin} ({usd_str})\n"
-        f"📌 Giriş Fiyatı: ${entry_px:,.4f}\n"
+        f"<b>{baslik}</b>\n"
+        f"<code>{adres[:20]}...</code>\n"
+        f"🕐 {zaman_str}\n"
+        f"{ayrac}\n"
+        f"<pre>{satir}"
     )
-    if pnl is not None and olay != "ACILDI":
-        pnl_emoji = "✅" if pnl >= 0 else "❌"
-        mesaj += f"{pnl_emoji} Gerçekleşmemiş PnL: ${pnl:,.2f}\n"
-    if onceki_szi is not None and olay == "DEGISTI":
-        mesaj += f"📈 Önceki Boyut: {abs(onceki_szi):,.4f} {coin}\n"
-    mesaj += f"\n🔗 <code>{adres[:20]}...</code>\n⏱ {zaman_str}"
+
+    if olay == "DEGISTI" and onceki_szi is not None:
+        degisim_pct = (szi - onceki_szi) / abs(onceki_szi) * 100 if onceki_szi != 0 else 0
+        mesaj += f"\n  Önceki: {abs(onceki_szi):.4f} → {szi_abs:.4f} ({degisim_pct:+.0f}%)"
+
+    mesaj += "</pre>"
     return mesaj
 
 
