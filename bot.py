@@ -1958,7 +1958,24 @@ HABER_COINLER = [
     "bitcoin", "btc", "ethereum", "eth"
 ]
 
-HABER_GONDERILENLER = set()  # Aynı haberi iki kez gönderme
+HABER_GONDERILENLER = set()
+HABER_GONDERILENLER_DOSYA = "/data/haber_gonderilenler.json"
+
+def _haber_gonderilenler_yukle():
+    global HABER_GONDERILENLER
+    try:
+        with open(HABER_GONDERILENLER_DOSYA, "r") as f:
+            HABER_GONDERILENLER = set(json.load(f))
+        print(f"[HABER] {len(HABER_GONDERILENLER)} haber ID yuklendi.")
+    except:
+        HABER_GONDERILENLER = set()
+
+def _haber_gonderilenler_kaydet():
+    try:
+        with open(HABER_GONDERILENLER_DOSYA, "w") as f:
+            json.dump(list(HABER_GONDERILENLER)[-500:], f)
+    except Exception as e:
+        print(f"[HABER] Kayit hatasi: {e}")
 
 RSS_KAYNAKLAR = [
     ("CoinDesk",      "https://www.coindesk.com/arc/outboundfeeds/rss/"),
@@ -2152,14 +2169,15 @@ def _haber_kontrol():
 
             # Sadece gruba gönder
             _telegram_topic_mesaj_gonder(TOPIC_HABER, mesaj)
-
             HABER_GONDERILENLER.add(haber_id)
+            _haber_gonderilenler_kaydet()
             yeni_haber_sayisi += 1
-            time.sleep(2)  # Flood önleme
+            time.sleep(2)
 
-    # Bellek temizliği — 500'den fazla ID varsa eskilerini sil
+    # Bellek temizliği
     if len(HABER_GONDERILENLER) > 500:
         HABER_GONDERILENLER = set(list(HABER_GONDERILENLER)[-250:])
+        _haber_gonderilenler_kaydet()
 
     print(f"[HABER] Kontrol tamamlandi. {yeni_haber_sayisi} yeni haber gonderildi.")
 
@@ -2988,6 +3006,7 @@ def _trend_zamanlayici():
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 _watermark_yukle()
+_haber_gonderilenler_yukle()
 threading.Thread(target=_whale_kontrol, daemon=True).start()
 threading.Thread(target=_tarayici_zamanlayici, daemon=True).start()
 threading.Thread(target=_trend_zamanlayici, daemon=True).start()
