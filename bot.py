@@ -1577,11 +1577,12 @@ def _trend_fg_renk(deger):
 
 
 # ==========================================
-# BALİNA CÜzDAN TAKİBİ (OI BAZLI)
+# ==========================================
+# BALİNA POZİSYON TAKİBİ (OI BAZLI)
 # ==========================================
 
-WHALE_OI_DEGISIM_PCT = float(os.getenv("WHALE_OI_DEGISIM_PCT", "3.0"))  # Min %3 OI değişimi
-WHALE_OI_MIN_USD     = float(os.getenv("WHALE_OI_MIN_USD", "10000000")) # Min $10M değişim
+WHALE_OI_DEGISIM_PCT = float(os.getenv("WHALE_OI_DEGISIM_PCT", "1.0"))  # Min %1 OI değişimi
+WHALE_OI_MIN_USD     = float(os.getenv("WHALE_OI_MIN_USD", "1000000"))  # Min $1M
 WHALE_OI_INTERVAL    = int(os.getenv("WHALE_OI_INTERVAL", "5"))         # Dakika
 
 OI_SEMBOLLER = [
@@ -1589,116 +1590,86 @@ OI_SEMBOLLER = [
     "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"
 ]
 
-_oi_onceki = {}  # {symbol: {"oi": float, "fiyat": float, "zaman": float}}
+_oi_onceki = {}
 
 
 def _oi_cek(symbol):
-    """Binance Futures OI ve fiyat çek."""
     try:
-        # Open Interest
-        r1 = requests.get(
-            "https://fapi.binance.com/fapi/v1/openInterest",
-            params={"symbol": symbol},
-            timeout=6
-        )
-        # Fiyat
-        r2 = requests.get(
-            "https://fapi.binance.com/fapi/v1/ticker/price",
-            params={"symbol": symbol},
-            timeout=6
-        )
+        r1 = requests.get("https://fapi.binance.com/fapi/v1/openInterest",
+                          params={"symbol": symbol}, timeout=6)
+        r2 = requests.get("https://fapi.binance.com/fapi/v1/ticker/price",
+                          params={"symbol": symbol}, timeout=6)
         if r1.status_code == 200 and r2.status_code == 200:
-            oi    = float(r1.json()["openInterest"])
-            fiyat = float(r2.json()["price"])
-            return oi, fiyat
+            return float(r1.json()["openInterest"]), float(r2.json()["price"])
     except Exception as e:
         print(f"[OI] {symbol} cekme hatasi: {e}")
     return None, None
 
 
-def _oi_yon_yorum(oi_degisim_pct, fiyat_degisim_pct):
-    """OI ve fiyat değişimine göre yön tahmini."""
-    if oi_degisim_pct > 0 and fiyat_degisim_pct > 0:
-        return "🟢 LONG", "Fiyat yükseldi + OI arttı"
-    elif oi_degisim_pct > 0 and fiyat_degisim_pct < 0:
-        return "🔴 SHORT", "Fiyat düştü + OI arttı"
-    elif oi_degisim_pct < 0 and fiyat_degisim_pct > 0:
-        return "⚠️ SHORT KAPANDI", "Fiyat yükseldi + OI azaldı"
+def _oi_yon_yorum(oi_pct, fiyat_pct):
+    if oi_pct > 0 and fiyat_pct > 0:
+        return "🟢 LONG AÇILDI", "OI arttı + Fiyat yükseldi"
+    elif oi_pct > 0 and fiyat_pct < 0:
+        return "🔴 SHORT AÇILDI", "OI arttı + Fiyat düştü"
+    elif oi_pct < 0 and fiyat_pct > 0:
+        return "⚠️ SHORT KAPATILDI", "OI azaldı + Fiyat yükseldi"
     else:
-        return "⚠️ LONG KAPANDI", "Fiyat düştü + OI azaldı"
+        return "⚠️ LONG KAPATILDI", "OI azaldı + Fiyat düştü"
 
 
 def _oi_kontrol():
-    """Tüm sembollerin OI değişimini kontrol et."""
     global _oi_onceki
-
     for symbol in OI_SEMBOLLER:
         try:
             oi, fiyat = _oi_cek(symbol)
             if oi is None:
                 continue
-
             simdi = time.time()
-
             if symbol not in _oi_onceki:
                 _oi_onceki[symbol] = {"oi": oi, "fiyat": fiyat, "zaman": simdi}
                 continue
+            onceki         = _oi_onceki[symbol]
+            oi_fark_pct    = (oi - onceki["oi"]) / onceki["oi"] * 100 if onceki["oi"] > 0 else 0
+            fiyat_fark_pct = (fiyat - onceki["fiyat"]) / onceki["fiyat"] * 100 if onceki["fiyat"] > 0 else 0
+            oi_fark_usd    = abs(oi - onceki["oi"]) * fiyat
 
-            onceki      = _oi_onceki[symbol]
-            oi_fark     = oi - onceki["oi"]
-            oi_fark_pct = (oi_fark / onceki["oi"]) * 100 if onceki["oi"] > 0 else 0
-            fiyat_fark_pct = ((fiyat - onceki["fiyat"]) / onceki["fiyat"]) * 100 if onceki["fiyat"] > 0 else 0
-
-            # OI değişimini USD'ye çevir
-            oi_fark_usd = abs(oi_fark) * fiyat
-
-            # Eşik kontrolü
             if abs(oi_fark_pct) >= WHALE_OI_DEGISIM_PCT and oi_fark_usd >= WHALE_OI_MIN_USD:
                 yon, aciklama = _oi_yon_yorum(oi_fark_pct, fiyat_fark_pct)
-
                 if TR_TZ:
                     zaman_str = datetime.now(tz=TR_TZ).strftime("%H:%M")
                 else:
                     zaman_str = datetime.utcnow().strftime("%H:%M UTC")
-
-                # USD formatla
                 if oi_fark_usd >= 1e9:
                     usd_str = f"${oi_fark_usd/1e9:.2f}B"
                 elif oi_fark_usd >= 1e6:
                     usd_str = f"${oi_fark_usd/1e6:.1f}M"
                 else:
                     usd_str = f"${oi_fark_usd:,.0f}"
-
+                sym_kisa = symbol.replace("USDT", "")
                 mesaj = (
-                    f"🐋 <b>BÜYÜK POZİSYON AÇILDI</b>\n\n"
-                    f"📊 <b>{symbol}</b> — Binance Futures\n"
+                    f"🐋 <b>BÜYÜK POZİSYON HAREKETİ</b>\n\n"
+                    f"📊 <b>{sym_kisa}/USDT</b> — Binance Futures\n"
                     f"💰 Fiyat: ${fiyat:,.2f}\n"
-                    f"📈 OI Değişimi: {oi_fark_pct:+.1f}% ({usd_str})\n"
+                    f"📈 OI Değişimi: {oi_fark_pct:+.2f}% ({usd_str})\n"
                     f"{yon}\n"
                     f"   └ {aciklama}\n\n"
                     f"⏱ {zaman_str}"
                 )
-
                 _telegram_topic_mesaj_gonder(TOPIC_BALINA, mesaj)
-                print(f"[OI] BİLDİRİM: {symbol} {yon} OI:{oi_fark_pct:+.1f}% ${oi_fark_usd/1e6:.1f}M")
-
-            # Her durumda güncelle
+                print(f"[OI] BİLDİRİM: {symbol} {yon} {oi_fark_pct:+.1f}% {usd_str}")
             _oi_onceki[symbol] = {"oi": oi, "fiyat": fiyat, "zaman": simdi}
-
         except Exception as e:
             print(f"[OI] {symbol} kontrol hatasi: {e}")
 
 
 def _oi_zamanlayici():
-    """Her WHALE_OI_INTERVAL dakikada bir OI kontrol et."""
     print(f"[OI] Zamanlayici basladi. Interval: {WHALE_OI_INTERVAL} dakika.")
     time.sleep(60)
-    # İlk çalışmada endpoint testi yap
     oi, fiyat = _oi_cek("BTCUSDT")
     if oi:
         print(f"[OI] Endpoint ACIK. BTC OI={oi:.0f} Fiyat={fiyat:.1f}")
     else:
-        print(f"[OI] Endpoint KAPALI veya hata — bildirim gelmeyecek!")
+        print(f"[OI] Endpoint KAPALI veya hata!")
     while True:
         try:
             _oi_kontrol()
@@ -1706,243 +1677,6 @@ def _oi_zamanlayici():
         except Exception as e:
             print(f"[OI] Zamanlayici hata: {e}")
             time.sleep(60)
-
-
-
-
-HABER_TARAMA_SURESI = int(os.getenv("HABER_TARAMA_SURESI", "15"))  # dakika
-
-HABER_COINLER = [
-    "bitcoin", "btc", "ethereum", "eth"
-]
-
-HABER_GONDERILENLER = set()
-HABER_GONDERILENLER_DOSYA = "/data/haber_gonderilenler.json"
-
-def _haber_gonderilenler_yukle():
-    global HABER_GONDERILENLER
-    try:
-        with open(HABER_GONDERILENLER_DOSYA, "r") as f:
-            HABER_GONDERILENLER = set(json.load(f))
-        print(f"[HABER] {len(HABER_GONDERILENLER)} haber ID yuklendi.")
-    except FileNotFoundError:
-        print("[HABER] Gecmis haber dosyasi yok, sifirdan basliyor.")
-        HABER_GONDERILENLER = set()
-    except Exception as e:
-        print(f"[HABER] Yukle hatasi: {e}")
-        HABER_GONDERILENLER = set()
-
-def _haber_gonderilenler_kaydet():
-    try:
-        with open(HABER_GONDERILENLER_DOSYA, "w") as f:
-            json.dump(list(HABER_GONDERILENLER)[-500:], f)
-    except Exception as e:
-        print(f"[HABER] Kayit hatasi: {e}")
-
-RSS_KAYNAKLAR = [
-    ("CoinDesk",      "https://www.coindesk.com/arc/outboundfeeds/rss/"),
-    ("CoinTelegraph", "https://cointelegraph.com/rss"),
-    ("Decrypt",       "https://decrypt.co/feed"),
-]
-
-
-def _haber_rss_cek(url):
-    """RSS feed'den haberleri çek."""
-    try:
-        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code != 200:
-            return []
-        import xml.etree.ElementTree as ET
-        root = ET.fromstring(r.content)
-        haberler = []
-        for item in root.findall(".//item")[:20]:
-            baslik = item.findtext("title", "").strip()
-            link   = item.findtext("link",  "").strip()
-            tarih  = item.findtext("pubDate", "").strip()
-            desc   = item.findtext("description", "").strip()
-            if baslik and link:
-                haberler.append({"baslik": baslik, "link": link, "tarih": tarih, "desc": desc})
-        return haberler
-    except Exception as e:
-        print(f"[HABER] RSS cekme hatasi: {e}")
-        return []
-
-
-def _haber_onemli_mi(baslik, desc=""):
-    """Sadece BTC/ETH ile ilgili VE yüksek etkili haberleri geçir."""
-    baslik_lower = baslik.lower()
-
-    # BTC veya ETH BAŞLIKTA geçmeli
-    coin_var = any(c in baslik_lower for c in HABER_COINLER)
-    if not coin_var:
-        return False
-
-    # Yüksek etkili kelime de BAŞLIKTA geçmeli
-    yuksek_etki = [
-        "hack", "hacked", "exploit", "stolen", "theft",
-        "crash", "crashes", "ban", "banned", "bans",
-        "sec sues", "lawsuit", "bankrupt", "bankruptcy",
-        "fraud", "scam", "collapse", "collapses",
-        "rejected", "rejects", "plunges", "plunge",
-        "liquidation", "liquidated", "attack", "breach",
-        "prison", "arrested", "criminal", "money laundering",
-        "crashed near zero", "crashes near zero",
-        "etf approved", "etf approval", "sec approves",
-        "all-time high", "ath", "record high",
-        "blackrock", "fidelity", "spot etf",
-        "legal tender", "country adopts",
-        "rate cut", "halving",
-        "strategic reserve", "government buys",
-        "mass adoption", "retreats below", "outflows",
-        "liquidating", "reserve campaign",
-    ]
-
-    return any(k in baslik_lower for k in yuksek_etki)
-
-
-def _haber_cevir(metin):
-    """Google Translate ücretsiz endpoint ile Türkçeye çevir."""
-    try:
-        url = "https://translate.googleapis.com/translate_a/single"
-        params = {
-            "client": "gtx",
-            "sl": "en",
-            "tl": "tr",
-            "dt": "t",
-            "q": metin
-        }
-        r = requests.get(url, params=params, timeout=8)
-        if r.status_code == 200:
-            data = r.json()
-            tercume = "".join([x[0] for x in data[0] if x[0]])
-            return tercume.strip()
-    except Exception as e:
-        print(f"[HABER] Ceviri hatasi: {e}")
-    return metin  # Çeviri başarısızsa orijinal döner
-
-
-def _haber_etki_analiz(baslik, desc=""):
-    """Anahtar kelime bazlı ücretsiz piyasa etkisi analizi."""
-    metin = baslik.lower()
-
-    pozitif = [
-        "etf approved", "etf approval", "sec approves", "all-time high", "ath",
-        "record high", "blackrock", "fidelity", "spot etf", "legal tender",
-        "country adopts", "nation adopts", "federal reserve", "rate cut",
-        "halving", "institutional buy", "mass adoption", "strategic reserve",
-        "government buys", "rally", "surge", "soars", "bullish"
-    ]
-    negatif = [
-        "hack", "hacked", "exploit", "stolen", "theft", "crash", "crashes",
-        "ban", "banned", "bans", "sec sues", "lawsuit", "bankrupt", "bankruptcy",
-        "fraud", "scam", "collapse", "collapses", "rejected", "rejects",
-        "plunges", "plunge", "liquidation", "liquidated", "attack", "breach",
-        "prison", "arrested", "criminal", "money laundering"
-    ]
-
-    poz_eslesme = [k for k in pozitif if k in metin]
-    neg_eslesme = [k for k in negatif if k in metin]
-
-    if neg_eslesme and not poz_eslesme:
-        etki = "Negatif"
-    elif poz_eslesme and not neg_eslesme:
-        etki = "Pozitif"
-    else:
-        etki = "Karışık"
-
-    coin_map = {
-        "bitcoin": "BTC", "btc": "BTC",
-        "ethereum": "ETH", "eth": "ETH",
-        "bnb": "BNB", "binance": "BNB",
-        "solana": "SOL", "sol": "SOL",
-        "xrp": "XRP", "ripple": "XRP",
-        "dogecoin": "DOGE", "doge": "DOGE",
-        "cardano": "ADA", "ada": "ADA",
-        "avalanche": "AVAX", "avax": "AVAX",
-        "chainlink": "LINK", "link": "LINK",
-        "polkadot": "DOT", "dot": "DOT",
-        "defi": "DeFi", "nft": "NFT",
-    }
-    coinler = list(dict.fromkeys([v for k, v in coin_map.items() if k in metin]))
-
-    # Türkçe başlık
-    baslik_tr = _haber_cevir(baslik)
-
-    # Türkçe özet — RSS description'dan al, temizle, çevir
-    ozet_tr = ""
-    if desc:
-        try:
-            import re
-            temiz = re.sub(r"<[^>]+>", "", desc).strip()  # HTML taglarını kaldır
-            temiz = temiz[:300]  # Max 300 karakter
-            if temiz:
-                ozet_tr = _haber_cevir(temiz)
-        except Exception as e:
-            print(f"[HABER] Ozet ceviri hatasi: {e}")
-
-    return {
-        "baslik_tr": baslik_tr,
-        "ozet_tr":   ozet_tr,
-        "etki":      etki,
-        "etkilenen_coinler": coinler[:4]
-    }
-
-
-def _haber_mesaj_olustur(baslik, link, kaynak, analiz):
-    """Telegram mesajı oluştur."""
-    if analiz:
-        etki       = analiz.get("etki", "Nötr")
-        baslik_tr  = analiz.get("baslik_tr", baslik)
-        ozet_tr    = analiz.get("ozet_tr", "")
-        coinler    = ", ".join(analiz.get("etkilenen_coinler", []))
-        etki_emoji = "🟢" if etki == "Pozitif" else "🔴" if etki == "Negatif" else "🟡" if etki == "Karışık" else "⚪"
-
-        msg  = f"📰 <b>ÖNEMLİ HABER</b>\n\n"
-        msg += f"📌 <b>{baslik_tr}</b>\n\n"
-        if ozet_tr:
-            msg += f"📝 {ozet_tr}\n\n"
-        msg += f"{etki_emoji} <b>Piyasa Etkisi:</b> {etki}\n"
-        if coinler:
-            msg += f"⚡ <b>Etkilenen:</b> {coinler}\n"
-        msg += f"\n<i>Kaynak: {kaynak}</i>"
-    else:
-        baslik_tr = _haber_cevir(baslik)
-        msg = f"📰 <b>ÖNEMLİ HABER</b>\n\n📌 <b>{baslik_tr}</b>\n\n<i>Kaynak: {kaynak}</i>"
-    return msg
-
-
-def _haber_kontrol():
-    """RSS feed'leri kontrol et, önemli haberleri gönder."""
-    global HABER_GONDERILENLER
-    yeni_haber_sayisi = 0
-
-    for kaynak_adi, rss_url in RSS_KAYNAKLAR:
-        haberler = _haber_rss_cek(rss_url)
-        for haber in haberler:
-            haber_id = haber["link"]
-            if haber_id in HABER_GONDERILENLER:
-                continue
-            if not _haber_onemli_mi(haber["baslik"], haber.get("desc", "")):
-                continue
-
-            print(f"[HABER] Onemli haber: {haber['baslik'][:60]}...")
-            analiz = _haber_etki_analiz(haber["baslik"], haber.get("desc", ""))
-            mesaj  = _haber_mesaj_olustur(haber["baslik"], haber["link"], kaynak_adi, analiz)
-
-            # Sadece gruba gönder
-            _telegram_topic_mesaj_gonder(TOPIC_HABER, mesaj)
-            HABER_GONDERILENLER.add(haber_id)
-            _haber_gonderilenler_kaydet()
-            yeni_haber_sayisi += 1
-            time.sleep(2)
-
-    # Bellek temizliği
-    if len(HABER_GONDERILENLER) > 500:
-        HABER_GONDERILENLER = set(list(HABER_GONDERILENLER)[-250:])
-        _haber_gonderilenler_kaydet()
-
-    print(f"[HABER] Kontrol tamamlandi. {yeni_haber_sayisi} yeni haber gonderildi.")
-
 
 def _haber_zamanlayici():
     """Her HABER_TARAMA_SURESI dakikada bir haberleri kontrol et."""
