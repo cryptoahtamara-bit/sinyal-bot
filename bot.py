@@ -1247,61 +1247,65 @@ def webhook():
                             zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
                         else:
                             zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
-                        ayrac = "─" * 28
+                        ayrac = "─" * 32
                         for adres, isim in HL_CUZDANLAR.items():
                             try:
                                 pozlar = _hl_pozisyon_cek(adres)
-                                if pozlar is None:
-                                    continue
                                 if not pozlar:
                                     continue
-
-                                # Sadece HL_MIN_USD üzeri pozisyonlar
-                                buyuk = {c: p for c, p in pozlar.items()
-                                         if abs(p["szi"]) * p["entryPx"] >= HL_MIN_USD}
-                                if not buyuk:
+                                sirali = sorted(
+                                    [(c, p) for c, p in pozlar.items()
+                                     if abs(p["szi"]) * p["entryPx"] >= HL_MIN_USD],
+                                    key=lambda x: abs(x[1]["szi"]) * x[1]["entryPx"],
+                                    reverse=True
+                                )
+                                if not sirali:
                                     continue
 
-                                # USD değerine göre sırala
-                                sirali = sorted(buyuk.items(),
-                                                key=lambda x: abs(x[1]["szi"]) * x[1]["entryPx"],
-                                                reverse=True)
+                                long_satirlar  = []
+                                short_satirlar = []
 
-                                satirlar = []
-                                for coin, p in sirali:
+                                for i, (coin, p) in enumerate(sirali, 1):
                                     szi      = p["szi"]
                                     entry_px = p["entryPx"]
                                     pnl      = p["unrealizedPnl"]
                                     usd      = abs(szi) * entry_px
-                                    yon      = "🟢 L" if szi > 0 else "🔴 S"
                                     if usd >= 1e6:
                                         usd_str = f"${usd/1e6:.1f}M"
                                     else:
                                         usd_str = f"${usd/1e3:.0f}K"
-                                    pnl_str  = f"+${pnl/1e3:.1f}K" if pnl >= 0 else f"-${abs(pnl)/1e3:.1f}K"
-                                    coin_pad = coin[:8].ljust(8)
-                                    # Giriş fiyatı formatı
                                     if entry_px >= 1000:
                                         px_str = f"${entry_px:,.0f}"
                                     elif entry_px >= 1:
                                         px_str = f"${entry_px:.2f}"
                                     else:
                                         px_str = f"${entry_px:.4f}"
-                                    satirlar.append(
-                                        f"{yon} {coin_pad} {usd_str:>7}  @{px_str}  PnL:{pnl_str:>9}"
-                                    )
+                                    pnl_str = (f"+${pnl/1e3:.1f}K" if pnl >= 0 else f"-${abs(pnl)/1e3:.1f}K")
+                                    coin_p  = coin[:8].ljust(8)
+                                    usd_p   = usd_str.rjust(7)
+                                    satir   = f"{coin_p} {usd_p}  {px_str}  {pnl_str}"
+                                    if szi > 0:
+                                        long_satirlar.append(f"🟢 {len(long_satirlar)+1}. {satir}")
+                                    else:
+                                        short_satirlar.append(f"🔴 {len(short_satirlar)+1}. {satir}")
 
-                                mesaj = (
-                                    f"🐋 <b>{isim}</b>\n"
-                                    f"<code>{adres[:20]}...</code>\n"
-                                    f"🕐 {zaman_str}\n"
-                                    f"{ayrac}\n"
-                                    f"<pre>{'YÖN COİN     BOYUT   GİRİŞ        PnL':}\n"
-                                    f"{ayrac[:28]}\n"
-                                    + "\n".join(satirlar) +
-                                    f"</pre>"
-                                )
-                                _telegram_topic_mesaj_gonder(TOPIC_BALINA, mesaj)
+                                msg  = f"❗ <b>BEN KÜL YUTMAM</b> ❗\n\n"
+                                msg += f"🐋 <b>{isim} — Hyperliquid</b>\n"
+                                msg += f"🕐 {zaman_str}\n"
+                                msg += ayrac + "\n\n"
+
+                                if long_satirlar:
+                                    msg += "🚀 <b>Long Pozisyonlar</b>\n"
+                                    msg += "<pre>" + "\n".join(long_satirlar) + "</pre>\n"
+                                    msg += ayrac + "\n\n"
+
+                                if short_satirlar:
+                                    msg += "📉 <b>Short Pozisyonlar</b>\n"
+                                    msg += "<pre>" + "\n".join(short_satirlar) + "</pre>\n"
+                                    msg += ayrac + "\n"
+
+                                msg += f"İletişim: {KANAL_TAG}"
+                                _telegram_topic_mesaj_gonder(TOPIC_BALINA, msg)
                                 time.sleep(1)
                             except Exception as e:
                                 print(f"[HL_DURUM] {isim} hata: {e}")
@@ -1801,7 +1805,109 @@ HL_INTERVAL    = int(os.getenv("HL_INTERVAL",  "5"))        # Dakika
 _hl_onceki     = {}  # {adres: {coin: {szi, entryPx, unrealizedPnl}}}
 
 
-def _hl_pozisyon_cek(adres):
+def _hl_gorsel(isim, adres, pozlar, zaman_str):
+    """Hyperliquid pozisyonları için PNG tablo üret."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import io
+
+        # Sadece HL_MIN_USD üzeri, USD'ye göre sırala
+        sirali = sorted(
+            [(c, p) for c, p in pozlar.items() if abs(p["szi"]) * p["entryPx"] >= HL_MIN_USD],
+            key=lambda x: abs(x[1]["szi"]) * x[1]["entryPx"],
+            reverse=True
+        )
+        if not sirali:
+            return None
+
+        satirlar = []
+        for coin, p in sirali:
+            szi      = p["szi"]
+            entry_px = p["entryPx"]
+            pnl      = p["unrealizedPnl"]
+            usd      = abs(szi) * entry_px
+            yon      = "LONG" if szi > 0 else "SHORT"
+            if usd >= 1e6:
+                usd_str = f"${usd/1e6:.1f}M"
+            else:
+                usd_str = f"${usd/1e3:.0f}K"
+            if entry_px >= 1000:
+                px_str = f"${entry_px:,.0f}"
+            elif entry_px >= 1:
+                px_str = f"${entry_px:.2f}"
+            else:
+                px_str = f"${entry_px:.4f}"
+            pnl_str = f"+${pnl/1e3:.1f}K" if pnl >= 0 else f"-${abs(pnl)/1e3:.1f}K"
+            satirlar.append([coin, yon, usd_str, px_str, pnl_str, pnl >= 0])
+
+        n     = len(satirlar)
+        yuk   = max(1.8 + n * 0.42, 3.0)
+        fig, ax = plt.subplots(figsize=(7, yuk))
+        fig.patch.set_facecolor("#0A0E1A")
+        ax.set_facecolor("#0A0E1A")
+        ax.axis("off")
+
+        # Başlık
+        fig.text(0.5, 0.97, f"🐋  {isim}  —  Hyperliquid Pozisyonlar",
+                 ha="center", va="top", fontsize=11, fontweight="bold",
+                 color="#E8E8E6", fontfamily="monospace")
+        fig.text(0.5, 0.91, f"{adres[:24]}...   |   {zaman_str}",
+                 ha="center", va="top", fontsize=8, color="#6B7280",
+                 fontfamily="monospace")
+
+        # Tablo verisi
+        tablo_veri = [[s[0], s[1], s[2], s[3], s[4]] for s in satirlar]
+        kolon_adlari = ["COİN", "YÖN", "BOYUT", "GİRİŞ", "PnL"]
+
+        tablo = ax.table(
+            cellText=tablo_veri,
+            colLabels=kolon_adlari,
+            cellLoc="center",
+            loc="center",
+            bbox=[0, 0, 1, 0.85]
+        )
+        tablo.auto_set_font_size(False)
+        tablo.set_fontsize(9)
+
+        # Stil
+        for (row, col), cell in tablo.get_celld().items():
+            cell.set_facecolor("#0A0E1A")
+            cell.set_edgecolor("#1F2937")
+            cell.set_linewidth(0.5)
+
+            if row == 0:
+                cell.set_facecolor("#111827")
+                cell.set_text_props(color="#9CA3AF", fontweight="bold", fontsize=8)
+            else:
+                s = satirlar[row - 1]
+                yon_val = s[1]
+                pnl_pos = s[5]
+
+                if col == 0:
+                    cell.set_text_props(color="#E8E8E6", fontweight="bold")
+                elif col == 1:
+                    color = "#4CAF50" if yon_val == "LONG" else "#F44336"
+                    cell.set_text_props(color=color, fontweight="bold")
+                elif col == 2:
+                    cell.set_text_props(color="#C9A84C")
+                elif col == 3:
+                    cell.set_text_props(color="#9CA3AF")
+                elif col == 4:
+                    color = "#4CAF50" if pnl_pos else "#F44336"
+                    cell.set_text_props(color=color, fontweight="bold")
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                    facecolor="#0A0E1A", edgecolor="none")
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        print(f"[HL] Gorsel hata: {e}")
+        return None
     """Hyperliquid'dan cüzdanın açık pozisyonlarını çek."""
     try:
         r = requests.post(
