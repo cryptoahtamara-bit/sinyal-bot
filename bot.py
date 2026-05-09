@@ -1840,66 +1840,114 @@ def _haber_onemli_mi(baslik, desc=""):
     return coin_eslesti and kritik_eslesti
 
 
-def _haber_etki_analiz(baslik):
-    """Claude API ile Türkçe başlık + özet + piyasa etkisi üret."""
+def _haber_cevir(metin):
+    """Google Translate ücretsiz endpoint ile Türkçeye çevir."""
     try:
-        payload = {
-            "model": "claude-sonnet-4-20250514",
-            "max_tokens": 300,
-            "messages": [{
-                "role": "user",
-                "content": f"""Aşağıdaki kripto haber başlığını analiz et.
-SADECE JSON formatında yanıt ver, başka hiçbir şey yazma:
-
-{{
-  "baslik_tr": "Haberin Türkçe başlığı",
-  "ozet": "Türkçe 2-3 cümle özet",
-  "etki": "Pozitif" veya "Negatif" veya "Nötr",
-  "etkilenen_coinler": ["BTC", "ETH"] gibi liste
-}}
-
-Haber başlığı: {baslik}"""
-            }]
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl": "en",
+            "tl": "tr",
+            "dt": "t",
+            "q": metin
         }
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json"},
-            json=payload,
-            timeout=15
-        )
+        r = requests.get(url, params=params, timeout=8)
         if r.status_code == 200:
-            icerik = r.json()["content"][0]["text"].strip()
-            icerik = icerik.replace("```json", "").replace("```", "").strip()
-            return json.loads(icerik)
+            data = r.json()
+            tercume = "".join([x[0] for x in data[0] if x[0]])
+            return tercume.strip()
     except Exception as e:
-        print(f"[HABER] AI analiz hatasi: {e}")
-    return None
+        print(f"[HABER] Ceviri hatasi: {e}")
+    return metin  # Çeviri başarısızsa orijinal döner
+
+
+def _haber_etki_analiz(baslik, desc=""):
+    """Anahtar kelime bazlı ücretsiz piyasa etkisi analizi."""
+    metin = baslik.lower()
+
+    pozitif = [
+        "etf approved", "etf approval", "sec approves", "bullish", "rally",
+        "all-time high", "ath", "surge", "soars", "gains", "institutional",
+        "blackrock", "fidelity", "adoption", "partnership", "upgrade",
+        "halving", "buy", "accumulate", "record", "growth", "launches"
+    ]
+    negatif = [
+        "hack", "exploit", "hacked", "stolen", "crash", "crashes", "plunge",
+        "plunges", "ban", "banned", "lawsuit", "sec sues", "rejected",
+        "bankruptcy", "fraud", "scam", "dump", "sell-off", "liquidation",
+        "fear", "warning", "risk", "vulnerability", "breach", "attack"
+    ]
+
+    poz_eslesme = [k for k in pozitif if k in metin]
+    neg_eslesme = [k for k in negatif if k in metin]
+
+    if neg_eslesme and not poz_eslesme:
+        etki = "Negatif"
+    elif poz_eslesme and not neg_eslesme:
+        etki = "Pozitif"
+    elif poz_eslesme and neg_eslesme:
+        etki = "Karışık"
+    else:
+        etki = "Nötr"
+
+    coin_map = {
+        "bitcoin": "BTC", "btc": "BTC",
+        "ethereum": "ETH", "eth": "ETH",
+        "bnb": "BNB", "binance": "BNB",
+        "solana": "SOL", "sol": "SOL",
+        "xrp": "XRP", "ripple": "XRP",
+        "dogecoin": "DOGE", "doge": "DOGE",
+        "cardano": "ADA", "ada": "ADA",
+        "avalanche": "AVAX", "avax": "AVAX",
+        "chainlink": "LINK", "link": "LINK",
+        "polkadot": "DOT", "dot": "DOT",
+        "defi": "DeFi", "nft": "NFT",
+    }
+    coinler = list(dict.fromkeys([v for k, v in coin_map.items() if k in metin]))
+
+    # Türkçe başlık
+    baslik_tr = _haber_cevir(baslik)
+
+    # Türkçe özet — RSS description'dan al, temizle, çevir
+    ozet_tr = ""
+    if desc:
+        try:
+            import re
+            temiz = re.sub(r"<[^>]+>", "", desc).strip()  # HTML taglarını kaldır
+            temiz = temiz[:300]  # Max 300 karakter
+            if temiz:
+                ozet_tr = _haber_cevir(temiz)
+        except Exception as e:
+            print(f"[HABER] Ozet ceviri hatasi: {e}")
+
+    return {
+        "baslik_tr": baslik_tr,
+        "ozet_tr":   ozet_tr,
+        "etki":      etki,
+        "etkilenen_coinler": coinler[:4]
+    }
 
 
 def _haber_mesaj_olustur(baslik, link, kaynak, analiz):
-    """Telegram mesajı oluştur — Türkçe başlık, özet, link yok."""
+    """Telegram mesajı oluştur."""
     if analiz:
-        etki         = analiz.get("etki", "Nötr")
-        baslik_tr    = analiz.get("baslik_tr", baslik)
-        ozet         = analiz.get("ozet", "")
-        coinler      = ", ".join(analiz.get("etkilenen_coinler", []))
-        etki_emoji   = "🟢" if etki == "Pozitif" else "🔴" if etki == "Negatif" else "⚪"
+        etki       = analiz.get("etki", "Nötr")
+        baslik_tr  = analiz.get("baslik_tr", baslik)
+        ozet_tr    = analiz.get("ozet_tr", "")
+        coinler    = ", ".join(analiz.get("etkilenen_coinler", []))
+        etki_emoji = "🟢" if etki == "Pozitif" else "🔴" if etki == "Negatif" else "🟡" if etki == "Karışık" else "⚪"
 
-        msg = (
-            f"📰 <b>ÖNEMLİ HABER</b>\n\n"
-            f"{etki_emoji} <b>Piyasa Etkisi:</b> {etki}\n\n"
-            f"📌 <b>{baslik_tr}</b>\n\n"
-            f"📝 {ozet}\n"
-        )
+        msg  = f"📰 <b>ÖNEMLİ HABER</b>\n\n"
+        msg += f"📌 <b>{baslik_tr}</b>\n\n"
+        if ozet_tr:
+            msg += f"📝 {ozet_tr}\n\n"
+        msg += f"{etki_emoji} <b>Piyasa Etkisi:</b> {etki}\n"
         if coinler:
-            msg += f"\n⚡ <b>Etkilenen:</b> {coinler}"
-        msg += f"\n\n<i>Kaynak: {kaynak}</i>"
+            msg += f"⚡ <b>Etkilenen:</b> {coinler}\n"
+        msg += f"\n<i>Kaynak: {kaynak}</i>"
     else:
-        msg = (
-            f"📰 <b>ÖNEMLİ HABER</b>\n\n"
-            f"📌 <b>{baslik}</b>\n\n"
-            f"<i>Kaynak: {kaynak}</i>"
-        )
+        baslik_tr = _haber_cevir(baslik)
+        msg = f"📰 <b>ÖNEMLİ HABER</b>\n\n📌 <b>{baslik_tr}</b>\n\n<i>Kaynak: {kaynak}</i>"
     return msg
 
 
@@ -1918,7 +1966,7 @@ def _haber_kontrol():
                 continue
 
             print(f"[HABER] Onemli haber: {haber['baslik'][:60]}...")
-            analiz = _haber_etki_analiz(haber["baslik"])
+            analiz = _haber_etki_analiz(haber["baslik"], haber.get("desc", ""))
             mesaj  = _haber_mesaj_olustur(haber["baslik"], haber["link"], kaynak_adi, analiz)
 
             # Sadece gruba gönder
