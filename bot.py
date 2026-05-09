@@ -1247,10 +1247,13 @@ def webhook():
                             zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
                         else:
                             zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
-                        ayrac = "─" * 32
+                        ayrac = "-" * 32
+                        print(f"[HL_DURUM] Basliyor. {len(HL_CUZDANLAR)} cuzdan.")
                         for adres, isim in HL_CUZDANLAR.items():
                             try:
+                                print(f"[HL_DURUM] {isim} sorgulanıyor...")
                                 pozlar = _hl_pozisyon_cek(adres)
+                                print(f"[HL_DURUM] {isim}: {len(pozlar) if pozlar else 0} pozisyon")
                                 if not pozlar:
                                     continue
                                 sirali = sorted(
@@ -2347,6 +2350,27 @@ def _istatistik_zamanlayici():
             data = r.json()
             if data.get("success") and data.get("data"):
                 tickers = data["data"]
+                usdt_tickers = [t for t in tickers if str(t.get("symbol","")).endswith("_USDT")]
+                toplam_hacim = sum(float(t.get("amount24", 0) or 0) for t in usdt_tickers)
+                if toplam_hacim > 0:
+                    btc_hacim = next((float(t.get("amount24",0) or 0) for t in usdt_tickers if t.get("symbol") == "BTC_USDT"), 0)
+                    eth_hacim = next((float(t.get("amount24",0) or 0) for t in usdt_tickers if t.get("symbol") == "ETH_USDT"), 0)
+                    btc_dom   = round(btc_hacim / toplam_hacim * 100, 2)
+                    eth_dom   = round(eth_hacim / toplam_hacim * 100, 2)
+                    return btc_dom, eth_dom, toplam_hacim, 0
+    except Exception as e:
+        print(f"[TREND] dominans hata: {e}")
+    return None, None, None, None
+
+
+def _trend_btc_dominans():
+    """BTC dominansını MEXC ticker'dan hesapla."""
+    try:
+        r = requests.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("success") and data.get("data"):
+                tickers      = data["data"]
                 usdt_tickers = [t for t in tickers if str(t.get("symbol","")).endswith("_USDT")]
                 toplam_hacim = sum(float(t.get("amount24", 0) or 0) for t in usdt_tickers)
                 if toplam_hacim > 0:
