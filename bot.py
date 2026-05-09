@@ -1897,7 +1897,13 @@ def _oi_kontrol():
 def _oi_zamanlayici():
     """Her WHALE_OI_INTERVAL dakikada bir OI kontrol et."""
     print(f"[OI] Zamanlayici basladi. Interval: {WHALE_OI_INTERVAL} dakika.")
-    time.sleep(60)  # İlk başlamayı bekle
+    time.sleep(60)
+    # İlk çalışmada endpoint testi yap
+    oi, fiyat = _oi_cek("BTCUSDT")
+    if oi:
+        print(f"[OI] Endpoint ACIK. BTC OI={oi:.0f} Fiyat={fiyat:.1f}")
+    else:
+        print(f"[OI] Endpoint KAPALI veya hata — bildirim gelmeyecek!")
     while True:
         try:
             _oi_kontrol()
