@@ -1322,7 +1322,9 @@ def webhook():
                                     msg += ayrac + "\n"
 
                                 msg += f"İletişim: {KANAL_TAG}"
-                                _telegram_topic_mesaj_gonder(TOPIC_BALINA, msg)
+                                print(f"[HL_DURUM] {isim} mesaj gonderiliyor. GRUP_ID={TELEGRAM_GRUP_ID} TOPIC={TOPIC_BALINA}")
+                                r = _telegram_topic_mesaj_gonder(TOPIC_BALINA, msg)
+                                print(f"[HL_DURUM] {isim} sonuc: {r.status_code if r else 'None'}")
                                 time.sleep(1)
                             except Exception as e:
                                 print(f"[HL_DURUM] {isim} hata: {e}")
