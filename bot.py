@@ -1262,6 +1262,7 @@ def webhook():
                                     key=lambda x: abs(x[1]["szi"]) * x[1]["entryPx"],
                                     reverse=True
                                 )
+                                print(f"[HL_DURUM] {isim}: sirali={len(sirali)} HL_MIN_USD={HL_MIN_USD}")
                                 if not sirali:
                                     continue
 
