@@ -29,6 +29,7 @@ TOPIC_ANALIZ      = int(os.getenv("TOPIC_ANALIZ",  "3"))
 TOPIC_YUKSELENLER = int(os.getenv("TOPIC_YUKSELENLER", "5"))
 TOPIC_RAPOR       = int(os.getenv("TOPIC_RAPOR",   "6"))
 TOPIC_HABER       = int(os.getenv("TOPIC_HABER",   "287")) # 📰 Haberler & Analiz
+TOPIC_BALINA      = int(os.getenv("TOPIC_BALINA",  "393")) # 🐋 Balina Cüzdan Takibi
 
 # ==========================================
 # FİLİGRAN
@@ -1781,8 +1782,132 @@ def _trend_fg_renk(deger):
 
 
 # ==========================================
-# HABER SİSTEMİ
+# BALİNA CÜzDAN TAKİBİ (OI BAZLI)
 # ==========================================
+
+WHALE_OI_DEGISIM_PCT = float(os.getenv("WHALE_OI_DEGISIM_PCT", "3.0"))  # Min %3 OI değişimi
+WHALE_OI_MIN_USD     = float(os.getenv("WHALE_OI_MIN_USD", "10000000")) # Min $10M değişim
+WHALE_OI_INTERVAL    = int(os.getenv("WHALE_OI_INTERVAL", "5"))         # Dakika
+
+OI_SEMBOLLER = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+    "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT"
+]
+
+_oi_onceki = {}  # {symbol: {"oi": float, "fiyat": float, "zaman": float}}
+
+
+def _oi_cek(symbol):
+    """Binance Futures OI ve fiyat çek."""
+    try:
+        # Open Interest
+        r1 = requests.get(
+            "https://fapi.binance.com/fapi/v1/openInterest",
+            params={"symbol": symbol},
+            timeout=6
+        )
+        # Fiyat
+        r2 = requests.get(
+            "https://fapi.binance.com/fapi/v1/ticker/price",
+            params={"symbol": symbol},
+            timeout=6
+        )
+        if r1.status_code == 200 and r2.status_code == 200:
+            oi    = float(r1.json()["openInterest"])
+            fiyat = float(r2.json()["price"])
+            return oi, fiyat
+    except Exception as e:
+        print(f"[OI] {symbol} cekme hatasi: {e}")
+    return None, None
+
+
+def _oi_yon_yorum(oi_degisim_pct, fiyat_degisim_pct):
+    """OI ve fiyat değişimine göre yön tahmini."""
+    if oi_degisim_pct > 0 and fiyat_degisim_pct > 0:
+        return "🟢 LONG", "Fiyat yükseldi + OI arttı"
+    elif oi_degisim_pct > 0 and fiyat_degisim_pct < 0:
+        return "🔴 SHORT", "Fiyat düştü + OI arttı"
+    elif oi_degisim_pct < 0 and fiyat_degisim_pct > 0:
+        return "⚠️ SHORT KAPANDI", "Fiyat yükseldi + OI azaldı"
+    else:
+        return "⚠️ LONG KAPANDI", "Fiyat düştü + OI azaldı"
+
+
+def _oi_kontrol():
+    """Tüm sembollerin OI değişimini kontrol et."""
+    global _oi_onceki
+
+    for symbol in OI_SEMBOLLER:
+        try:
+            oi, fiyat = _oi_cek(symbol)
+            if oi is None:
+                continue
+
+            simdi = time.time()
+
+            if symbol not in _oi_onceki:
+                _oi_onceki[symbol] = {"oi": oi, "fiyat": fiyat, "zaman": simdi}
+                continue
+
+            onceki      = _oi_onceki[symbol]
+            oi_fark     = oi - onceki["oi"]
+            oi_fark_pct = (oi_fark / onceki["oi"]) * 100 if onceki["oi"] > 0 else 0
+            fiyat_fark_pct = ((fiyat - onceki["fiyat"]) / onceki["fiyat"]) * 100 if onceki["fiyat"] > 0 else 0
+
+            # OI değişimini USD'ye çevir
+            oi_fark_usd = abs(oi_fark) * fiyat
+
+            # Eşik kontrolü
+            if abs(oi_fark_pct) >= WHALE_OI_DEGISIM_PCT and oi_fark_usd >= WHALE_OI_MIN_USD:
+                yon, aciklama = _oi_yon_yorum(oi_fark_pct, fiyat_fark_pct)
+
+                if TR_TZ:
+                    zaman_str = datetime.now(tz=TR_TZ).strftime("%H:%M")
+                else:
+                    zaman_str = datetime.utcnow().strftime("%H:%M UTC")
+
+                # USD formatla
+                if oi_fark_usd >= 1e9:
+                    usd_str = f"${oi_fark_usd/1e9:.2f}B"
+                elif oi_fark_usd >= 1e6:
+                    usd_str = f"${oi_fark_usd/1e6:.1f}M"
+                else:
+                    usd_str = f"${oi_fark_usd:,.0f}"
+
+                mesaj = (
+                    f"🐋 <b>BÜYÜK POZİSYON AÇILDI</b>\n\n"
+                    f"📊 <b>{symbol}</b> — Binance Futures\n"
+                    f"💰 Fiyat: ${fiyat:,.2f}\n"
+                    f"📈 OI Değişimi: {oi_fark_pct:+.1f}% ({usd_str})\n"
+                    f"{yon}\n"
+                    f"   └ {aciklama}\n\n"
+                    f"⏱ {zaman_str}"
+                )
+
+                _telegram_topic_mesaj_gonder(TOPIC_BALINA, mesaj)
+                print(f"[OI] BİLDİRİM: {symbol} {yon} OI:{oi_fark_pct:+.1f}% ${oi_fark_usd/1e6:.1f}M")
+
+            # Her durumda güncelle
+            _oi_onceki[symbol] = {"oi": oi, "fiyat": fiyat, "zaman": simdi}
+
+        except Exception as e:
+            print(f"[OI] {symbol} kontrol hatasi: {e}")
+
+
+def _oi_zamanlayici():
+    """Her WHALE_OI_INTERVAL dakikada bir OI kontrol et."""
+    print(f"[OI] Zamanlayici basladi. Interval: {WHALE_OI_INTERVAL} dakika.")
+    time.sleep(60)  # İlk başlamayı bekle
+    while True:
+        try:
+            _oi_kontrol()
+            time.sleep(WHALE_OI_INTERVAL * 60)
+        except Exception as e:
+            print(f"[OI] Zamanlayici hata: {e}")
+            time.sleep(60)
+
+
+
 
 HABER_TARAMA_SURESI = int(os.getenv("HABER_TARAMA_SURESI", "15"))  # dakika
 
@@ -2801,6 +2926,7 @@ threading.Thread(target=_tarayici_zamanlayici, daemon=True).start()
 threading.Thread(target=_trend_zamanlayici, daemon=True).start()
 threading.Thread(target=_ls_zamanlayici, daemon=True).start()
 threading.Thread(target=_haber_zamanlayici, daemon=True).start()
+threading.Thread(target=_oi_zamanlayici, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
