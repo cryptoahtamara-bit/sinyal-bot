@@ -1805,6 +1805,37 @@ HL_INTERVAL    = int(os.getenv("HL_INTERVAL",  "5"))        # Dakika
 _hl_onceki     = {}  # {adres: {coin: {szi, entryPx, unrealizedPnl}}}
 
 
+def _hl_pozisyon_cek(adres):
+    """Hyperliquid'dan cüzdanın açık pozisyonlarını çek."""
+    try:
+        r = requests.post(
+            "https://api.hyperliquid.xyz/info",
+            json={"type": "clearinghouseState", "user": adres},
+            headers={"Content-Type": "application/json"},
+            timeout=8
+        )
+        if r.status_code == 200:
+            data = r.json()
+            pozlar = {}
+            for p in data.get("assetPositions", []):
+                pos  = p.get("position", {})
+                coin = pos.get("coin", "")
+                szi  = float(pos.get("szi", 0))
+                if szi == 0:
+                    continue
+                entry_px   = float(pos.get("entryPx") or 0)
+                unrealized = float(pos.get("unrealizedPnl") or 0)
+                pozlar[coin] = {
+                    "szi":           szi,
+                    "entryPx":       entry_px,
+                    "unrealizedPnl": unrealized,
+                }
+            return pozlar
+    except Exception as e:
+        print(f"[HL] {adres[:10]} cekme hatasi: {e}")
+    return None
+
+
 def _hl_gorsel(isim, adres, pozlar, zaman_str):
     """Hyperliquid pozisyonları için PNG tablo üret."""
     try:
