@@ -403,21 +403,40 @@ def get_high_low_in_period(symbol: str, start_ts: int, end_ts: int):
     sym = get_sym(symbol)
     if not sym.endswith("USDT"):
         sym += "USDT"
-    for api_url in ["https://api.mexc.com/api/v3/klines", "https://api.binance.com/api/v3/klines"]:
+
+    # Önce MEXC Futures, sonra Binance Futures, son çare spot
+    apis = [
+        ("https://contract.mexc.com/api/v1/contract/kline/" + sym,
+         {"interval": "Min1", "start": start_ts, "end": end_ts}, "mexc_futures"),
+        ("https://fapi.binance.com/fapi/v1/klines",
+         {"symbol": sym, "interval": "1m", "startTime": start_ts * 1000,
+          "endTime": end_ts * 1000, "limit": 1500}, "binance_futures"),
+        ("https://api.binance.com/api/v3/klines",
+         {"symbol": sym, "interval": "1m", "startTime": start_ts * 1000,
+          "endTime": end_ts * 1000, "limit": 1500}, "binance_spot"),
+    ]
+
+    for api_url, params, kaynak in apis:
         try:
-            params = {
-                "symbol": sym, "interval": "1m",
-                "startTime": start_ts * 1000,
-                "endTime":   end_ts   * 1000,
-                "limit": 1500
-            }
             r = requests.get(api_url, params=params, timeout=10)
             if r.status_code == 200:
-                klines = r.json()
-                if klines:
-                    return max(float(k[2]) for k in klines), min(float(k[3]) for k in klines)
+                data = r.json()
+                # MEXC Futures farklı format
+                if kaynak == "mexc_futures":
+                    if data.get("success") and data.get("data"):
+                        klines = data["data"]
+                        highs = [float(k[3]) for k in klines if len(k) > 3]
+                        lows  = [float(k[4]) for k in klines if len(k) > 4]
+                        if highs and lows:
+                            print(f"[TP] High/Low kaynak: MEXC Futures")
+                            return max(highs), min(lows)
+                else:
+                    klines = data
+                    if klines:
+                        print(f"[TP] High/Low kaynak: {kaynak}")
+                        return max(float(k[2]) for k in klines), min(float(k[3]) for k in klines)
         except Exception as e:
-            print(f"[TP] kline hata ({api_url}): {e}")
+            print(f"[TP] kline hata ({kaynak}): {e}")
     return None, None
 
 
