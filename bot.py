@@ -1967,7 +1967,11 @@ def _haber_gonderilenler_yukle():
         with open(HABER_GONDERILENLER_DOSYA, "r") as f:
             HABER_GONDERILENLER = set(json.load(f))
         print(f"[HABER] {len(HABER_GONDERILENLER)} haber ID yuklendi.")
-    except:
+    except FileNotFoundError:
+        print("[HABER] Gecmis haber dosyasi yok, sifirdan basliyor.")
+        HABER_GONDERILENLER = set()
+    except Exception as e:
+        print(f"[HABER] Yukle hatasi: {e}")
         HABER_GONDERILENLER = set()
 
 def _haber_gonderilenler_kaydet():
