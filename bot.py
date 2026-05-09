@@ -1949,16 +1949,14 @@ def _haber_rss_cek(url):
 def _haber_onemli_mi(baslik, desc=""):
     """Sadece BTC/ETH ile ilgili VE yüksek etkili haberleri geçir."""
     baslik_lower = baslik.lower()
-    metin_lower  = (baslik + " " + desc).lower()
 
-    # BTC veya ETH sadece BAŞLIKTA geçmeli
+    # BTC veya ETH BAŞLIKTA geçmeli
     coin_var = any(c in baslik_lower for c in HABER_COINLER)
     if not coin_var:
         return False
 
-    # Yüksek etkili kelimeler — hem pozitif hem negatif
+    # Yüksek etkili kelime de BAŞLIKTA geçmeli
     yuksek_etki = [
-        # Güçlü negatif
         "hack", "hacked", "exploit", "stolen", "theft",
         "crash", "crashes", "ban", "banned", "bans",
         "sec sues", "lawsuit", "bankrupt", "bankruptcy",
@@ -1967,17 +1965,17 @@ def _haber_onemli_mi(baslik, desc=""):
         "liquidation", "liquidated", "attack", "breach",
         "prison", "arrested", "criminal", "money laundering",
         "crashed near zero", "crashes near zero",
-        # Güçlü pozitif
         "etf approved", "etf approval", "sec approves",
         "all-time high", "ath", "record high",
         "blackrock", "fidelity", "spot etf",
         "legal tender", "country adopts",
-        "federal reserve", "rate cut",
-        "halving", "strategic reserve", "government buys",
-        "mass adoption",
+        "rate cut", "halving",
+        "strategic reserve", "government buys",
+        "mass adoption", "retreats below", "outflows",
+        "liquidating", "reserve campaign",
     ]
 
-    return any(k in metin_lower for k in yuksek_etki)
+    return any(k in baslik_lower for k in yuksek_etki)
 
 
 def _haber_cevir(metin):
