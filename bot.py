@@ -1202,7 +1202,35 @@ def webhook():
                     print(f"[KOMUT] /trend islendi.")
                     threading.Thread(target=lambda: _trend_gonder(), daemon=True).start()
 
-            elif text.startswith("/haber"):
+            elif text.startswith("/hl_test"):
+                if chat_id in yetkili and thread_id == TOPIC_BALINA:
+                    def _hl_test():
+                        satirlar = ["🧪 Hyperliquid API Testi:\n"]
+                        adresler = [
+                            "0x08c14b32c8a48894e4b933090ebcc9ce33b21135",
+                            "0x3ee505ba316879d246a8fd2b3d7ee63b51b44fab",
+                        ]
+                        for adres in adresler:
+                            try:
+                                r = requests.post(
+                                    "https://api.hyperliquid.xyz/info",
+                                    json={"type": "clearinghouseState", "user": adres},
+                                    headers={"Content-Type": "application/json"},
+                                    timeout=8
+                                )
+                                if r.status_code == 200:
+                                    data = r.json()
+                                    pozisyonlar = data.get("assetPositions", [])
+                                    satirlar.append(f"✅ {adres[:10]}... → {len(pozisyonlar)} pozisyon")
+                                    for p in pozisyonlar[:3]:
+                                        pos = p.get("position", {})
+                                        satirlar.append(f"   {pos.get('coin')} {pos.get('szi')} @ {pos.get('entryPx')}")
+                                else:
+                                    satirlar.append(f"❌ {adres[:10]}...: HTTP {r.status_code}")
+                            except Exception as e:
+                                satirlar.append(f"❌ {adres[:10]}...: {str(e)[:60]}")
+                        _telegram_topic_mesaj_gonder(TOPIC_BALINA, "\n".join(satirlar))
+                    threading.Thread(target=_hl_test, daemon=True).start()
                 if chat_id in yetkili and thread_id == TOPIC_HABER:
                     print(f"[KOMUT] /haber islendi.")
                     threading.Thread(target=_haber_kontrol, daemon=True).start()
