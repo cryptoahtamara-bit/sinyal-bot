@@ -1678,6 +1678,194 @@ def _oi_zamanlayici():
             print(f"[OI] Zamanlayici hata: {e}")
             time.sleep(60)
 
+
+# ==========================================
+# HABER SİSTEMİ
+# ==========================================
+
+HABER_GONDERILENLER = set()
+HABER_GONDERILENLER_DOSYA = "/data/haber_gonderilenler.json"
+HABER_TARAMA_SURESI = int(os.getenv("HABER_TARAMA_SURESI", "15"))
+
+HABER_COINLER = ["bitcoin", "btc", "ethereum", "eth"]
+
+RSS_KAYNAKLAR = [
+    ("CoinDesk",      "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+    ("CoinTelegraph", "https://cointelegraph.com/rss"),
+    ("Decrypt",       "https://decrypt.co/feed"),
+]
+
+
+def _haber_gonderilenler_yukle():
+    global HABER_GONDERILENLER
+    try:
+        with open(HABER_GONDERILENLER_DOSYA, "r") as f:
+            HABER_GONDERILENLER = set(json.load(f))
+        print(f"[HABER] {len(HABER_GONDERILENLER)} haber ID yuklendi.")
+    except FileNotFoundError:
+        print("[HABER] Gecmis haber dosyasi yok, sifirdan basliyor.")
+        HABER_GONDERILENLER = set()
+    except Exception as e:
+        print(f"[HABER] Yukle hatasi: {e}")
+        HABER_GONDERILENLER = set()
+
+
+def _haber_gonderilenler_kaydet():
+    try:
+        with open(HABER_GONDERILENLER_DOSYA, "w") as f:
+            json.dump(list(HABER_GONDERILENLER)[-500:], f)
+    except Exception as e:
+        print(f"[HABER] Kayit hatasi: {e}")
+
+
+def _haber_rss_cek(url):
+    try:
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return []
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(r.content)
+        haberler = []
+        for item in root.findall(".//item")[:20]:
+            baslik = item.findtext("title", "").strip()
+            link   = item.findtext("link",  "").strip()
+            desc   = item.findtext("description", "").strip()
+            if baslik and link:
+                haberler.append({"baslik": baslik, "link": link, "desc": desc})
+        return haberler
+    except Exception as e:
+        print(f"[HABER] RSS cekme hatasi: {e}")
+        return []
+
+
+def _haber_onemli_mi(baslik, desc=""):
+    baslik_lower = baslik.lower()
+    coin_var = any(c in baslik_lower for c in HABER_COINLER)
+    if not coin_var:
+        return False
+    yuksek_etki = [
+        "hack", "hacked", "exploit", "stolen", "theft",
+        "crash", "crashes", "ban", "banned", "bans",
+        "sec sues", "lawsuit", "bankrupt", "bankruptcy",
+        "fraud", "scam", "collapse", "collapses",
+        "rejected", "rejects", "plunges", "plunge",
+        "liquidation", "liquidated", "attack", "breach",
+        "prison", "arrested", "criminal", "money laundering",
+        "crashed near zero", "crashes near zero",
+        "etf approved", "etf approval", "sec approves",
+        "all-time high", "ath", "record high",
+        "blackrock", "fidelity", "spot etf",
+        "legal tender", "country adopts",
+        "rate cut", "halving",
+        "strategic reserve", "government buys",
+        "mass adoption", "retreats below", "outflows",
+        "liquidating", "reserve campaign",
+    ]
+    return any(k in baslik_lower for k in yuksek_etki)
+
+
+def _haber_cevir(metin):
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {"client": "gtx", "sl": "en", "tl": "tr", "dt": "t", "q": metin}
+        r = requests.get(url, params=params, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            return "".join([x[0] for x in data[0] if x[0]]).strip()
+    except Exception as e:
+        print(f"[HABER] Ceviri hatasi: {e}")
+    return metin
+
+
+def _haber_etki_analiz(baslik, desc=""):
+    metin = baslik.lower()
+    pozitif = [
+        "etf approved", "etf approval", "sec approves", "all-time high", "ath",
+        "record high", "blackrock", "fidelity", "spot etf", "legal tender",
+        "country adopts", "rate cut", "halving", "strategic reserve",
+        "government buys", "mass adoption", "rally", "surge", "bullish"
+    ]
+    negatif = [
+        "hack", "hacked", "exploit", "stolen", "theft", "crash", "crashes",
+        "ban", "banned", "bans", "sec sues", "lawsuit", "bankrupt", "bankruptcy",
+        "fraud", "scam", "collapse", "rejected", "plunges", "plunge",
+        "liquidation", "liquidated", "attack", "breach", "prison", "arrested",
+        "criminal", "money laundering", "retreats below", "outflows"
+    ]
+    poz = [k for k in pozitif if k in metin]
+    neg = [k for k in negatif if k in metin]
+    if neg and not poz:
+        etki = "Negatif"
+    elif poz and not neg:
+        etki = "Pozitif"
+    else:
+        etki = "Karışık"
+
+    coin_map = {
+        "bitcoin": "BTC", "btc": "BTC",
+        "ethereum": "ETH", "eth": "ETH",
+    }
+    coinler = list(dict.fromkeys([v for k, v in coin_map.items() if k in metin]))
+
+    baslik_tr = _haber_cevir(baslik)
+    ozet_tr = ""
+    if desc:
+        try:
+            import re
+            temiz = re.sub(r"<[^>]+>", "", desc).strip()[:300]
+            if temiz:
+                ozet_tr = _haber_cevir(temiz)
+        except:
+            pass
+
+    return {"baslik_tr": baslik_tr, "ozet_tr": ozet_tr, "etki": etki, "etkilenen_coinler": coinler}
+
+
+def _haber_mesaj_olustur(baslik, link, kaynak, analiz):
+    if analiz:
+        etki      = analiz.get("etki", "Karışık")
+        baslik_tr = analiz.get("baslik_tr", baslik)
+        ozet_tr   = analiz.get("ozet_tr", "")
+        coinler   = ", ".join(analiz.get("etkilenen_coinler", []))
+        emoji     = "🟢" if etki == "Pozitif" else "🔴" if etki == "Negatif" else "🟡"
+        msg  = f"📰 <b>ÖNEMLİ HABER</b>\n\n"
+        msg += f"📌 <b>{baslik_tr}</b>\n\n"
+        if ozet_tr:
+            msg += f"📝 {ozet_tr}\n\n"
+        msg += f"{emoji} <b>Piyasa Etkisi:</b> {etki}\n"
+        if coinler:
+            msg += f"⚡ <b>Etkilenen:</b> {coinler}\n"
+        msg += f"\n<i>Kaynak: {kaynak}</i>"
+    else:
+        msg = f"📰 <b>ÖNEMLİ HABER</b>\n\n📌 <b>{baslik}</b>\n\n<i>Kaynak: {kaynak}</i>"
+    return msg
+
+
+def _haber_kontrol():
+    global HABER_GONDERILENLER
+    yeni = 0
+    for kaynak_adi, rss_url in RSS_KAYNAKLAR:
+        haberler = _haber_rss_cek(rss_url)
+        for haber in haberler:
+            haber_id = haber["link"]
+            if haber_id in HABER_GONDERILENLER:
+                continue
+            if not _haber_onemli_mi(haber["baslik"], haber.get("desc", "")):
+                continue
+            print(f"[HABER] Onemli haber: {haber['baslik'][:60]}...")
+            analiz = _haber_etki_analiz(haber["baslik"], haber.get("desc", ""))
+            mesaj  = _haber_mesaj_olustur(haber["baslik"], haber["link"], kaynak_adi, analiz)
+            _telegram_topic_mesaj_gonder(TOPIC_HABER, mesaj)
+            HABER_GONDERILENLER.add(haber_id)
+            _haber_gonderilenler_kaydet()
+            yeni += 1
+            time.sleep(2)
+    if len(HABER_GONDERILENLER) > 500:
+        HABER_GONDERILENLER = set(list(HABER_GONDERILENLER)[-250:])
+        _haber_gonderilenler_kaydet()
+    print(f"[HABER] Kontrol tamamlandi. {yeni} yeni haber gonderildi.")
+
+
 def _haber_zamanlayici():
     """Her HABER_TARAMA_SURESI dakikada bir haberleri kontrol et."""
     print(f"[HABER] Zamanlayici basladi. Tarama suresi: {HABER_TARAMA_SURESI} dakika.")
