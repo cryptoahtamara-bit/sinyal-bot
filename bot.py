@@ -302,6 +302,9 @@ def _topic_foto_gonder_filigranli(topic_id, img_data, caption, parse_mode="HTML"
 def get_screenshot_chartimg(symbol: str, timeframe: str):
     if not CHARTIMG_KEY:
         return None
+    # Dominans sembolleri için chart çekme
+    if any(x in symbol.upper() for x in [".D", "DOMINAN"]):
+        return None
     tf_map = {
         "1": "1m", "3": "3m", "5": "5m", "15": "15m", "30": "30m",
         "60": "1h", "1H": "1h", "120": "2h", "240": "4h",
@@ -310,8 +313,12 @@ def get_screenshot_chartimg(symbol: str, timeframe: str):
     tf  = tf_map.get(str(timeframe), "1h")
     sym = symbol.upper().replace(".P", "").replace("USDT.P", "USDT")
 
+    # Dominans sembolleri — CRYPTOCAP prefix
+    dominans = ["USDT.D", "BTC.D", "ETH.D", "OTHERS.D", "USDC.D"]
+    if sym in dominans:
+        sym = f"CRYPTOCAP:{sym}"
     # Borsa zaten belirtilmişse dokunma
-    if any(x in sym for x in [":", "BINANCE", "BYBIT", "MEXC"]):
+    elif any(x in sym for x in [":", "BINANCE", "BYBIT", "MEXC", "CRYPTOCAP"]):
         pass
     else:
         sym = f"MEXC:{sym}.P"
@@ -1231,6 +1238,48 @@ def webhook():
                                 satirlar.append(f"❌ {adres[:10]}...: {str(e)[:60]}")
                         _telegram_topic_mesaj_gonder(TOPIC_BALINA, "\n".join(satirlar))
                     threading.Thread(target=_hl_test, daemon=True).start()
+
+            elif text.startswith("/hl_durum"):
+                if chat_id in yetkili and thread_id == TOPIC_BALINA:
+                    print(f"[KOMUT] /hl_durum islendi.")
+                    def _hl_durum_gonder():
+                        for adres, isim in HL_CUZDANLAR.items():
+                            try:
+                                pozlar = _hl_pozisyon_cek(adres)
+                                if pozlar is None:
+                                    _telegram_topic_mesaj_gonder(TOPIC_BALINA, f"⚠️ {isim}: Veri alınamadı.")
+                                    continue
+                                if not pozlar:
+                                    _telegram_topic_mesaj_gonder(TOPIC_BALINA, f"📭 {isim}: Açık pozisyon yok.")
+                                    continue
+                                if TR_TZ:
+                                    zaman_str = datetime.now(tz=TR_TZ).strftime("%H:%M")
+                                else:
+                                    zaman_str = datetime.utcnow().strftime("%H:%M UTC")
+                                satirlar = [f"📊 <b>{isim} — Güncel Pozisyonlar</b>\n🔗 <code>{adres[:20]}...</code>\n"]
+                                for coin, p in pozlar.items():
+                                    szi      = p["szi"]
+                                    entry_px = p["entryPx"]
+                                    pnl      = p["unrealizedPnl"]
+                                    yon      = "🟢 LONG" if szi > 0 else "🔴 SHORT"
+                                    usd      = abs(szi) * entry_px
+                                    if usd >= 1e6:
+                                        usd_str = f"${usd/1e6:.1f}M"
+                                    else:
+                                        usd_str = f"${usd:,.0f}"
+                                    pnl_str  = f"{'✅' if pnl >= 0 else '❌'} ${pnl:,.0f}"
+                                    satirlar.append(
+                                        f"<b>{coin}</b> {yon}\n"
+                                        f"   Boyut: {abs(szi):,.4f} ({usd_str})\n"
+                                        f"   Giriş: ${entry_px:,.4f}\n"
+                                        f"   PnL: {pnl_str}"
+                                    )
+                                satirlar.append(f"\n⏱ {zaman_str}")
+                                _telegram_topic_mesaj_gonder(TOPIC_BALINA, "\n\n".join(satirlar))
+                                time.sleep(1)
+                            except Exception as e:
+                                print(f"[HL_DURUM] {isim} hata: {e}")
+                    threading.Thread(target=_hl_durum_gonder, daemon=True).start()
 
             elif text.startswith("/haber"):
                 if chat_id in yetkili and thread_id == TOPIC_HABER:
