@@ -1787,10 +1787,7 @@ def _trend_fg_renk(deger):
 HABER_TARAMA_SURESI = int(os.getenv("HABER_TARAMA_SURESI", "15"))  # dakika
 
 HABER_COINLER = [
-    "bitcoin", "btc", "ethereum", "eth", "bnb", "binance",
-    "solana", "sol", "xrp", "ripple", "dogecoin", "doge",
-    "cardano", "ada", "avalanche", "avax", "chainlink", "link",
-    "polkadot", "dot"
+    "bitcoin", "btc", "ethereum", "eth"
 ]
 
 HABER_KRITIK = [
