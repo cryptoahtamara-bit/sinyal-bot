@@ -1965,14 +1965,15 @@ def _haber_onemli_mi(baslik, desc=""):
         "rejected", "rejects", "plunges", "plunge",
         "liquidation", "liquidated", "attack", "breach",
         "prison", "arrested", "criminal", "money laundering",
+        "crashed near zero", "crashes near zero",
         # Güçlü pozitif
         "etf approved", "etf approval", "sec approves",
         "all-time high", "ath", "record high",
         "blackrock", "fidelity", "spot etf",
-        "legal tender", "nation", "country adopts",
-        "federal reserve", "fed rate", "rate cut",
-        "halving", "institutional buy", "mass adoption",
-        "strategic reserve", "government buys",
+        "legal tender", "country adopts",
+        "federal reserve", "rate cut",
+        "halving", "strategic reserve", "government buys",
+        "mass adoption",
     ]
 
     return any(k in metin for k in yuksek_etki)
