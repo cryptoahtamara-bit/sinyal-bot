@@ -1817,6 +1817,21 @@ HL_CUZDANLAR = {
     "0x2cd991f48ba31536a96b772536a1daaaedf150ae": "Balina 3",
     "0xcc221419e754b43b2b5a9482909d8892ef70c838": "Balina 4",
     "0x41f9ae0b64a0ec4adc788ee5c82d4b824f839017": "Balina 5",
+    "0x7fdafde5cfb5465924316eced2d3715494c517d1": "Balina 6",
+    "0x06cecfbac34101ae41c88ebc2450f8602b3d164b": "Balina 7",
+    "0x5559da6ec434c5723d0ce9c4da7f29e3f8a3d43b": "Balina 8",
+    "0xa87a233e8a7d8951ff790a2e39738086cb5f71b7": "Balina 9",
+    "0x99967871e6c4f9a5185abc57edede9e9540191f6": "Balina 10",
+    "0x5f94a51948d2376ad34a6fadfa2544e651b74b96": "Balina 11",
+    "0xdd7a372377fc633f74ab6e20963803d52f448830": "Balina 12",
+    "0xdbd1bac81ad581c7198c9d155ca468f32a0c29dd": "Balina 13",
+    "0x72988778525f0ce15c5ac1804ac460606a987d6c": "Balina 14",
+    "0xfdf891f2b214a4c9374d26595ec6d4080262e381": "Balina 15",
+    "0xe639710e64d7094f7f82ab495915559c2f612953": "Balina 16",
+    "0x179c17d04be626561b0355a248d6055a80456aa5": "Balina 17",
+    "0x8cc94dc843e1ea7a19805e0cca43001123512b6a": "Balina 18",
+    "0x782e432267376f377585fc78092d998f8442ab83": "Balina 19",
+    "0x5b5d51203a0f9079f8aeb098a6523a13f298c060": "Balina 20",
 }
 
 HL_MIN_USD     = float(os.getenv("HL_MIN_USD", "100000"))   # Min $100K pozisyon
