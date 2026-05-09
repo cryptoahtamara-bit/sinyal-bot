@@ -1948,10 +1948,11 @@ def _haber_rss_cek(url):
 
 def _haber_onemli_mi(baslik, desc=""):
     """Sadece BTC/ETH ile ilgili VE yüksek etkili haberleri geçir."""
-    metin = (baslik + " " + desc).lower()
+    baslik_lower = baslik.lower()
+    metin_lower  = (baslik + " " + desc).lower()
 
-    # BTC veya ETH geçmeli
-    coin_var = any(c in metin for c in HABER_COINLER)
+    # BTC veya ETH sadece BAŞLIKTA geçmeli
+    coin_var = any(c in baslik_lower for c in HABER_COINLER)
     if not coin_var:
         return False
 
@@ -1976,7 +1977,7 @@ def _haber_onemli_mi(baslik, desc=""):
         "mass adoption",
     ]
 
-    return any(k in metin for k in yuksek_etki)
+    return any(k in metin_lower for k in yuksek_etki)
 
 
 def _haber_cevir(metin):
