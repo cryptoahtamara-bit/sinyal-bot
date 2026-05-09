@@ -1265,7 +1265,7 @@ def webhook():
                                 long_satirlar  = []
                                 short_satirlar = []
 
-                                for i, (coin, p) in enumerate(sirali, 1):
+                                for coin, p in sirali:
                                     szi      = p["szi"]
                                     entry_px = p["entryPx"]
                                     pnl      = p["unrealizedPnl"]
@@ -1281,13 +1281,18 @@ def webhook():
                                     else:
                                         px_str = f"${entry_px:.4f}"
                                     pnl_str = (f"+${pnl/1e3:.1f}K" if pnl >= 0 else f"-${abs(pnl)/1e3:.1f}K")
-                                    coin_p  = coin[:8].ljust(8)
-                                    usd_p   = usd_str.rjust(7)
-                                    satir   = f"{coin_p} {usd_p}  {px_str}  {pnl_str}"
+                                    coin_p  = coin[:7].ljust(7)
+                                    usd_p   = usd_str.rjust(6)
+                                    px_p    = px_str.rjust(10)
+                                    pnl_p   = pnl_str.rjust(9)
+                                    satir   = f"{coin_p} {usd_p} {px_p} {pnl_p}"
                                     if szi > 0:
-                                        long_satirlar.append(f"🟢 {len(long_satirlar)+1}. {satir}")
+                                        long_satirlar.append(satir)
                                     else:
-                                        short_satirlar.append(f"🔴 {len(short_satirlar)+1}. {satir}")
+                                        short_satirlar.append(satir)
+
+                                baslik_satir = f"{'COİN':<7} {'BOYUT':>6} {'GİRİŞ':>10} {'PnL':>9}"
+                                ayrac2 = "-" * len(baslik_satir)
 
                                 msg  = f"❗ <b>BEN KÜL YUTMAM</b> ❗\n\n"
                                 msg += f"🐋 <b>{isim} — Hyperliquid</b>\n"
@@ -1296,12 +1301,20 @@ def webhook():
 
                                 if long_satirlar:
                                     msg += "🚀 <b>Long Pozisyonlar</b>\n"
-                                    msg += "<pre>" + "\n".join(long_satirlar) + "</pre>\n"
+                                    msg += "<pre>"
+                                    msg += baslik_satir + "\n"
+                                    msg += ayrac2 + "\n"
+                                    msg += "\n".join(long_satirlar)
+                                    msg += "</pre>\n"
                                     msg += ayrac + "\n\n"
 
                                 if short_satirlar:
                                     msg += "📉 <b>Short Pozisyonlar</b>\n"
-                                    msg += "<pre>" + "\n".join(short_satirlar) + "</pre>\n"
+                                    msg += "<pre>"
+                                    msg += baslik_satir + "\n"
+                                    msg += ayrac2 + "\n"
+                                    msg += "\n".join(short_satirlar)
+                                    msg += "</pre>\n"
                                     msg += ayrac + "\n"
 
                                 msg += f"İletişim: {KANAL_TAG}"
