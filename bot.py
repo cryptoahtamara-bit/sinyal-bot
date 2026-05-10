@@ -500,8 +500,6 @@ def tp_kontrol_gonder(symbol, sinyal, timeframe, tp1, tp2, tp3, tp4, tp5, sl,
 
     def bildirim_gonder(msg):
         _telegram_topic_mesaj_gonder(TOPIC_ALARM, msg, reply_to=message_id)
-        if TELEGRAM_KANAL_ID:
-            _telegram_mesaj_gonder(TELEGRAM_KANAL_ID, msg)
         print(f"[TP] {symbol} bildirim gonderildi.")
         if TELEGRAM_LOG_ID:
             _telegram_mesaj_gonder(TELEGRAM_LOG_ID, msg)
@@ -1863,6 +1861,12 @@ HL_CUZDANLAR = {
     "0x8cc94dc843e1ea7a19805e0cca43001123512b6a": "Balina 18",
     "0x782e432267376f377585fc78092d998f8442ab83": "Balina 19",
     "0x5b5d51203a0f9079f8aeb098a6523a13f298c060": "Balina 20",
+    "0x393d0b87ed38fc779fd9611144ae649ba6082109": "Balina 21",
+    "0x488d2a9b70cc18ef66057a48ab3d59da1c59fe08": "Balina 22",
+    "0x4eb8d907136189a34c9b087950211b6a566f7819": "Balina 23",
+    "0xeadc152ac1014ace57c6b353f89adf5faffe9d55": "Balina 24",
+    "0x4ec8fe22a531a96c8a846aaf5cbef73202649a80": "Balina 25",
+    "0xecb63caa47c7c4e77f60f1ce858cf28dc2b82b00": "Balina 26",
 }
 
 HL_MIN_USD     = float(os.getenv("HL_MIN_USD", "100000"))   # Min $100K pozisyon
