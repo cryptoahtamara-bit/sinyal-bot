@@ -1363,35 +1363,18 @@ def webhook():
                 if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
                     def _liq_test():
                         sonuclar = []
-                        # 1. CoinGlass
-                        try:
-                            r = requests.get(
-                                "https://open-api.coinglass.com/public/v2/liquidation_ex",
-                                params={"symbol": "BTC", "time_type": "h1"},
-                                timeout=8
-                            )
-                            sonuclar.append(f"CoinGlass: {r.status_code} {r.text[:150]}")
-                        except Exception as e:
-                            sonuclar.append(f"CoinGlass hata: {e}")
-                        # 2. Binance futures klines (public)
-                        try:
-                            r2 = requests.get(
-                                "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
-                                params={"symbol": "BTCUSDT", "period": "1h", "limit": 1},
-                                timeout=8
-                            )
-                            sonuclar.append(f"Binance L/S: {r2.status_code} {r2.text[:150]}")
-                        except Exception as e:
-                            sonuclar.append(f"Binance L/S hata: {e}")
-                        # 3. Hyblock API
-                        try:
-                            r3 = requests.get(
-                                "https://api.hyblock.capital/v1/liquidation/btc",
-                                timeout=8
-                            )
-                            sonuclar.append(f"Hyblock: {r3.status_code} {r3.text[:150]}")
-                        except Exception as e:
-                            sonuclar.append(f"Hyblock hata: {e}")
+                        endpoints = [
+                            ("MEXC forceOrder", "https://contract.mexc.com/api/v1/contract/forceOrder/BTCUSDT", {}),
+                            ("MEXC liquidation", "https://contract.mexc.com/api/v1/contract/liquidation/BTCUSDT", {}),
+                            ("MEXC riskLimit", "https://contract.mexc.com/api/v1/contract/risk_limit/BTCUSDT", {}),
+                            ("MEXC openInterest", "https://contract.mexc.com/api/v1/contract/open_interest/BTCUSDT", {}),
+                        ]
+                        for isim, url, params in endpoints:
+                            try:
+                                r = requests.get(url, params=params, timeout=8)
+                                sonuclar.append(f"{isim}: {r.status_code}\n{r.text[:200]}")
+                            except Exception as e:
+                                sonuclar.append(f"{isim} hata: {str(e)[:100]}")
                         _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, "\n\n".join(sonuclar))
                     threading.Thread(target=_liq_test, daemon=True).start()
                 if chat_id in yetkili and thread_id == TOPIC_HABER:
