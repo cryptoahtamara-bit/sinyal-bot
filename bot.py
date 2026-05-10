@@ -1362,16 +1362,37 @@ def webhook():
             elif text.startswith("/liq_test"):
                 if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
                     def _liq_test():
+                        sonuclar = []
+                        # 1. CoinGlass
                         try:
                             r = requests.get(
-                                "https://fapi.binance.com/fapi/v1/forceOrders",
-                                params={"symbol": "BTCUSDT", "limit": 10},
+                                "https://open-api.coinglass.com/public/v2/liquidation_ex",
+                                params={"symbol": "BTC", "time_type": "h1"},
                                 timeout=8
                             )
-                            _telegram_topic_mesaj_gonder(TOPIC_ANALIZ,
-                                f"Likidisyon endpoint: {r.status_code}\n{r.text[:300]}")
+                            sonuclar.append(f"CoinGlass: {r.status_code} {r.text[:150]}")
                         except Exception as e:
-                            _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, f"Hata: {e}")
+                            sonuclar.append(f"CoinGlass hata: {e}")
+                        # 2. Binance futures klines (public)
+                        try:
+                            r2 = requests.get(
+                                "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+                                params={"symbol": "BTCUSDT", "period": "1h", "limit": 1},
+                                timeout=8
+                            )
+                            sonuclar.append(f"Binance L/S: {r2.status_code} {r2.text[:150]}")
+                        except Exception as e:
+                            sonuclar.append(f"Binance L/S hata: {e}")
+                        # 3. Hyblock API
+                        try:
+                            r3 = requests.get(
+                                "https://api.hyblock.capital/v1/liquidation/btc",
+                                timeout=8
+                            )
+                            sonuclar.append(f"Hyblock: {r3.status_code} {r3.text[:150]}")
+                        except Exception as e:
+                            sonuclar.append(f"Hyblock hata: {e}")
+                        _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, "\n\n".join(sonuclar))
                     threading.Thread(target=_liq_test, daemon=True).start()
                 if chat_id in yetkili and thread_id == TOPIC_HABER:
                     print(f"[KOMUT] /haber islendi.")
