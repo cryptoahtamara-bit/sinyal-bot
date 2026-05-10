@@ -1361,6 +1361,7 @@ def webhook():
 
             elif text.startswith("/liq_test"):
                 if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
+                    print(f"[KOMUT] /liq_test islendi.")
                     def _liq_test():
                         sonuclar = []
                         endpoints = [
@@ -1377,6 +1378,8 @@ def webhook():
                                 sonuclar.append(f"{isim} hata: {str(e)[:100]}")
                         _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, "\n\n".join(sonuclar))
                     threading.Thread(target=_liq_test, daemon=True).start()
+
+            elif text.startswith("/haber"):
                 if chat_id in yetkili and thread_id == TOPIC_HABER:
                     print(f"[KOMUT] /haber islendi.")
                     threading.Thread(target=_haber_kontrol, daemon=True).start()
