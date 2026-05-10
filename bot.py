@@ -2225,6 +2225,7 @@ def _haber_onemli_mi(baslik, desc=""):
     if not coin_var:
         return False
     yuksek_etki = [
+        # Negatif
         "hack", "hacked", "exploit", "stolen", "theft",
         "crash", "crashes", "ban", "banned", "bans",
         "sec sues", "lawsuit", "bankrupt", "bankruptcy",
@@ -2233,6 +2234,12 @@ def _haber_onemli_mi(baslik, desc=""):
         "liquidation", "liquidated", "attack", "breach",
         "prison", "arrested", "criminal", "money laundering",
         "crashed near zero", "crashes near zero",
+        "dump", "sell-off", "bearish", "warning", "risk",
+        "loses", "drops", "falls", "decline", "tumbles",
+        "fears", "concern", "uncertainty", "volatility",
+        "probe", "investigation", "charges", "penalty", "fine",
+        "restrict", "restriction", "crackdown", "regulate",
+        # Pozitif
         "etf approved", "etf approval", "sec approves",
         "all-time high", "ath", "record high",
         "blackrock", "fidelity", "spot etf",
@@ -2241,6 +2248,12 @@ def _haber_onemli_mi(baslik, desc=""):
         "strategic reserve", "government buys",
         "mass adoption", "retreats below", "outflows",
         "liquidating", "reserve campaign",
+        "rally", "surge", "soars", "gains", "rises",
+        "bullish", "breakout", "milestone", "record",
+        "partnership", "integration", "launch", "upgrade",
+        "institutional", "investment", "fund", "billion",
+        "fed", "federal reserve", "interest rate", "inflation", "cpi",
+        "trump", "congress", "senate", "legislation", "regulation",
     ]
     return any(k in baslik_lower for k in yuksek_etki)
 
