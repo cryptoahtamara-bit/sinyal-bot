@@ -1359,7 +1359,20 @@ def webhook():
                                 print(f"[HL_DURUM] {isim} hata: {e}")
                     threading.Thread(target=_hl_durum_gonder, daemon=True).start()
 
-            elif text.startswith("/haber"):
+            elif text.startswith("/liq_test"):
+                if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
+                    def _liq_test():
+                        try:
+                            r = requests.get(
+                                "https://fapi.binance.com/fapi/v1/forceOrders",
+                                params={"symbol": "BTCUSDT", "limit": 10},
+                                timeout=8
+                            )
+                            _telegram_topic_mesaj_gonder(TOPIC_ANALIZ,
+                                f"Likidisyon endpoint: {r.status_code}\n{r.text[:300]}")
+                        except Exception as e:
+                            _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, f"Hata: {e}")
+                    threading.Thread(target=_liq_test, daemon=True).start()
                 if chat_id in yetkili and thread_id == TOPIC_HABER:
                     print(f"[KOMUT] /haber islendi.")
                     threading.Thread(target=_haber_kontrol, daemon=True).start()
