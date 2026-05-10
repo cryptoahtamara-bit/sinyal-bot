@@ -1364,15 +1364,19 @@ def webhook():
                     print(f"[KOMUT] /liq_test islendi.")
                     def _liq_test():
                         endpoints = [
-                            ("MEXC forceOrder", "https://contract.mexc.com/api/v1/contract/forceOrder/BTCUSDT", {}),
-                            ("MEXC liquidation", "https://contract.mexc.com/api/v1/contract/liquidation/BTCUSDT", {}),
-                            ("MEXC riskLimit", "https://contract.mexc.com/api/v1/contract/risk_limit/BTCUSDT", {}),
-                            ("MEXC openInterest", "https://contract.mexc.com/api/v1/contract/open_interest/BTCUSDT", {}),
+                            ("BTC Funding Rate", "https://fapi.binance.com/fapi/v1/fundingRate",
+                             {"symbol": "BTCUSDT", "limit": 3}),
+                            ("BTC 24h Ticker", "https://fapi.binance.com/fapi/v1/ticker/24hr",
+                             {"symbol": "BTCUSDT"}),
+                            ("BTC Klines 1h", "https://fapi.binance.com/fapi/v1/klines",
+                             {"symbol": "BTCUSDT", "interval": "1h", "limit": 24}),
+                            ("BTC OI History", "https://fapi.binance.com/futures/data/openInterestHist",
+                             {"symbol": "BTCUSDT", "period": "1h", "limit": 24}),
                         ]
                         for isim, url, params in endpoints:
                             try:
                                 r = requests.get(url, params=params, timeout=8)
-                                mesaj = f"<b>{isim}</b>: {r.status_code}\n<pre>{r.text[:300]}</pre>"
+                                mesaj = f"<b>{isim}</b>: {r.status_code}\n<pre>{r.text[:200]}</pre>"
                             except Exception as e:
                                 mesaj = f"<b>{isim}</b> hata: {str(e)[:100]}"
                             _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, mesaj)
