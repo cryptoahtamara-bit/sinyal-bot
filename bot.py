@@ -15,6 +15,7 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_KANAL_ID = os.getenv("TELEGRAM_KANAL_ID", "")  # Eski alarm kanalı
 TELEGRAM_LOG_ID  = os.getenv("TELEGRAM_LOG_ID", "")
 CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
 KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
@@ -234,7 +235,7 @@ def _telegram_mesaj_gonder(chat_id, metin, reply_to=None, parse_mode="HTML"):
         return None
 
 
-def _telegram_topic_mesaj_gonder(topic_id, metin, parse_mode="HTML"):
+def _telegram_topic_mesaj_gonder(topic_id, metin, parse_mode="HTML", reply_to=None):
     """Grubun belirtilen topic'ine metin gönder."""
     if not TELEGRAM_GRUP_ID:
         return None
@@ -245,6 +246,8 @@ def _telegram_topic_mesaj_gonder(topic_id, metin, parse_mode="HTML"):
         "text": metin,
         "parse_mode": parse_mode
     }
+    if reply_to:
+        payload["reply_to_message_id"] = reply_to
     try:
         r = requests.post(f"{base}/sendMessage", json=payload, timeout=15)
         if r.status_code != 200:
@@ -496,9 +499,9 @@ def tp_kontrol_gonder(symbol, sinyal, timeframe, tp1, tp2, tp3, tp4, tp5, sl,
         return msg
 
     def bildirim_gonder(msg):
-        _telegram_topic_mesaj_gonder(TOPIC_ALARM, msg)
-        if TELEGRAM_CHAT_ID:
-            _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, msg)
+        _telegram_topic_mesaj_gonder(TOPIC_ALARM, msg, reply_to=message_id)
+        if TELEGRAM_KANAL_ID:
+            _telegram_mesaj_gonder(TELEGRAM_KANAL_ID, msg)
         print(f"[TP] {symbol} bildirim gonderildi.")
         if TELEGRAM_LOG_ID:
             _telegram_mesaj_gonder(TELEGRAM_LOG_ID, msg)
@@ -580,12 +583,12 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal,
     else:
         resp = _telegram_topic_mesaj_gonder(TOPIC_ALARM, caption)
 
-    # Eski kanala da gönder (sadece alarm bildirimleri)
-    if TELEGRAM_CHAT_ID:
+    # Eski kanala da gönder
+    if TELEGRAM_KANAL_ID:
         if img_data:
-            _telegram_foto_gonder(TELEGRAM_CHAT_ID, img_data, caption)
+            _telegram_foto_gonder(TELEGRAM_KANAL_ID, img_data, caption)
         else:
-            _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, caption)
+            _telegram_mesaj_gonder(TELEGRAM_KANAL_ID, caption)
 
     if resp and resp.status_code == 200:
         message_id = resp.json().get("result", {}).get("message_id")
