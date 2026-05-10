@@ -497,6 +497,8 @@ def tp_kontrol_gonder(symbol, sinyal, timeframe, tp1, tp2, tp3, tp4, tp5, sl,
 
     def bildirim_gonder(msg):
         _telegram_topic_mesaj_gonder(TOPIC_ALARM, msg)
+        if TELEGRAM_CHAT_ID:
+            _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, msg)
         print(f"[TP] {symbol} bildirim gonderildi.")
         if TELEGRAM_LOG_ID:
             _telegram_mesaj_gonder(TELEGRAM_LOG_ID, msg)
@@ -572,11 +574,18 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal,
         img_data = get_screenshot_chartimg(symbol, timeframe)
 
     message_id = None
-    # Sadece gruba gönder — 🔔 İndikatör Alarmları topic'i
+    # Gruba gönder — 🔔 İndikatör Alarmları topic'i
     if img_data:
         resp = _telegram_topic_foto_gonder(TOPIC_ALARM, img_data, caption)
     else:
         resp = _telegram_topic_mesaj_gonder(TOPIC_ALARM, caption)
+
+    # Eski kanala da gönder (sadece alarm bildirimleri)
+    if TELEGRAM_CHAT_ID:
+        if img_data:
+            _telegram_foto_gonder(TELEGRAM_CHAT_ID, img_data, caption)
+        else:
+            _telegram_mesaj_gonder(TELEGRAM_CHAT_ID, caption)
 
     if resp and resp.status_code == 200:
         message_id = resp.json().get("result", {}).get("message_id")
