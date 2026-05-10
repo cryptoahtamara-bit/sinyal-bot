@@ -1363,7 +1363,6 @@ def webhook():
                 if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
                     print(f"[KOMUT] /liq_test islendi.")
                     def _liq_test():
-                        sonuclar = []
                         endpoints = [
                             ("MEXC forceOrder", "https://contract.mexc.com/api/v1/contract/forceOrder/BTCUSDT", {}),
                             ("MEXC liquidation", "https://contract.mexc.com/api/v1/contract/liquidation/BTCUSDT", {}),
@@ -1373,10 +1372,11 @@ def webhook():
                         for isim, url, params in endpoints:
                             try:
                                 r = requests.get(url, params=params, timeout=8)
-                                sonuclar.append(f"{isim}: {r.status_code}\n{r.text[:200]}")
+                                mesaj = f"<b>{isim}</b>: {r.status_code}\n<pre>{r.text[:300]}</pre>"
                             except Exception as e:
-                                sonuclar.append(f"{isim} hata: {str(e)[:100]}")
-                        _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, "\n\n".join(sonuclar))
+                                mesaj = f"<b>{isim}</b> hata: {str(e)[:100]}"
+                            _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, mesaj)
+                            time.sleep(1)
                     threading.Thread(target=_liq_test, daemon=True).start()
 
             elif text.startswith("/haber"):
