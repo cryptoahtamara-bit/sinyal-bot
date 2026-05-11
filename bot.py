@@ -682,6 +682,10 @@ def istatistik_mesaji(snapshot=None):
         if tp_ok:
             sym_stats[sym]["basarili"] += 1
 
+    # Debug — sembol istatistiklerini logla
+    for sym, st in sorted(sym_stats.items(), key=lambda x: x[1]["toplam"], reverse=True):
+        print(f"[ISTATISTIK] {sym}: {st['basarili']}/{st['toplam']} = %{round(st['basarili']/st['toplam']*100,1) if st['toplam']>0 else 0}")
+
     # Başarı oranı: basarili / toplam (devam edenler dahil — görsel ile aynı)
     en_sym = max(
         ((sym, round(st["basarili"]/st["toplam"]*100, 1))
