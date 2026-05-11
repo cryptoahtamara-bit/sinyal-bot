@@ -1359,6 +1359,11 @@ def webhook():
                                 print(f"[HL_DURUM] {isim} hata: {e}")
                     threading.Thread(target=_hl_durum_gonder, daemon=True).start()
 
+            elif text.startswith("/liq"):
+                if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
+                    print(f"[KOMUT] /liq islendi.")
+                    threading.Thread(target=_liq_gonder, daemon=True).start()
+
             elif text.startswith("/liq_test"):
                 if chat_id in yetkili and thread_id == TOPIC_ANALIZ:
                     print(f"[KOMUT] /liq_test islendi.")
@@ -1844,6 +1849,259 @@ def _oi_kontrol():
 
 
 def _oi_zamanlayici():
+    """Her WHALE_OI_INTERVAL dakikada bir OI kontrol et."""
+    print(f"[OI] Zamanlayici basladi. Interval: {WHALE_OI_INTERVAL} dakika.")
+    time.sleep(60)
+    oi, fiyat = _oi_cek("BTCUSDT")
+    if oi:
+        print(f"[OI] Endpoint ACIK. BTC OI={oi:.0f} Fiyat={fiyat:.1f}")
+    else:
+        print(f"[OI] Endpoint KAPALI veya hata!")
+    while True:
+        try:
+            _oi_kontrol()
+            time.sleep(WHALE_OI_INTERVAL * 60)
+        except Exception as e:
+            print(f"[OI] Zamanlayici hata: {e}")
+            time.sleep(60)
+
+
+def _liq_veri_cek(symbol):
+    """BTC/ETH için funding rate, OI geçmişi, kline ve ticker çek."""
+    try:
+        sym = symbol  # BTCUSDT veya ETHUSDT
+
+        # 1) Funding Rate
+        r1 = requests.get("https://fapi.binance.com/fapi/v1/fundingRate",
+                          params={"symbol": sym, "limit": 1}, timeout=6)
+        funding = float(r1.json()[0]["fundingRate"]) * 100 if r1.status_code == 200 else 0
+
+        # 2) 24h Ticker
+        r2 = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr",
+                          params={"symbol": sym}, timeout=6)
+        ticker = r2.json() if r2.status_code == 200 else {}
+        fiyat    = float(ticker.get("lastPrice", 0))
+        high_24h = float(ticker.get("highPrice", 0))
+        low_24h  = float(ticker.get("lowPrice", 0))
+        degisim  = float(ticker.get("priceChangePercent", 0))
+
+        # 3) OI Geçmişi (24 saat, 1 saatlik)
+        r3 = requests.get("https://fapi.binance.com/futures/data/openInterestHist",
+                          params={"symbol": sym, "period": "1h", "limit": 24}, timeout=6)
+        oi_list = r3.json() if r3.status_code == 200 else []
+        oi_toplam = float(oi_list[-1]["sumOpenInterestValue"]) if oi_list else 0
+        oi_onceki = float(oi_list[0]["sumOpenInterestValue"]) if len(oi_list) > 1 else oi_toplam
+        oi_degisim = ((oi_toplam - oi_onceki) / oi_onceki * 100) if oi_onceki > 0 else 0
+
+        # 4) Klines 1h (24 adet)
+        r4 = requests.get("https://fapi.binance.com/fapi/v1/klines",
+                          params={"symbol": sym, "interval": "1h", "limit": 24}, timeout=6)
+        klines = r4.json() if r4.status_code == 200 else []
+
+        return {
+            "symbol": sym,
+            "fiyat": fiyat,
+            "high_24h": high_24h,
+            "low_24h": low_24h,
+            "degisim": degisim,
+            "funding": funding,
+            "oi_toplam": oi_toplam,
+            "oi_degisim": oi_degisim,
+            "oi_list": oi_list,
+            "klines": klines,
+        }
+    except Exception as e:
+        print(f"[LIQ] {symbol} veri hatasi: {e}")
+        return None
+
+
+def _liq_gorsel(veri):
+    """Likidisyon baskı haritası PNG üret."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import numpy as np
+        import io
+
+        sym      = veri["symbol"]
+        fiyat    = veri["fiyat"]
+        high_24h = veri["high_24h"]
+        low_24h  = veri["low_24h"]
+        funding  = veri["funding"]
+        oi_toplam = veri["oi_toplam"]
+        oi_degisim = veri["oi_degisim"]
+        degisim  = veri["degisim"]
+        klines   = veri["klines"]
+
+        # Fiyat bantlarını oluştur
+        aralik   = high_24h - low_24h
+        if aralik <= 0:
+            aralik = fiyat * 0.02
+        adim     = aralik / 10
+        bantlar  = [low_24h + i * adim for i in range(11)]
+
+        # Her bant için tahmini baskı hesapla
+        # Kline volume'u fiyat seviyesine dağıt
+        long_baskisi  = []
+        short_baskisi = []
+        for b in bantlar:
+            long_agirlik  = max(0, (b - low_24h) / aralik)       # Alt band → long yoğun
+            short_agirlik = max(0, (high_24h - b) / aralik)      # Üst band → short yoğun
+            vol = sum(float(k[5]) for k in klines if float(k[3]) <= b <= float(k[2])) if klines else 1
+            long_baskisi.append(long_agirlik * vol * (1 - funding * 5) if funding < 0 else long_agirlik * vol)
+            short_baskisi.append(short_agirlik * vol * (1 + funding * 5) if funding > 0 else short_agirlik * vol)
+
+        # Normalize
+        max_val = max(max(long_baskisi + short_baskisi), 1)
+        long_baskisi  = [v / max_val for v in long_baskisi]
+        short_baskisi = [v / max_val for v in short_baskisi]
+
+        # Grafik
+        fig, ax = plt.subplots(figsize=(7, 4))
+        fig.patch.set_facecolor("#0A0E1A")
+        ax.set_facecolor("#0A0E1A")
+
+        bant_etiketleri = [f"${b:,.0f}" for b in bantlar]
+        x = np.arange(len(bantlar))
+        w = 0.38
+
+        bars_l = ax.bar(x - w/2, long_baskisi,  w, color="#F44336", alpha=0.85, label="Long Baskısı",  zorder=3)
+        bars_s = ax.bar(x + w/2, short_baskisi, w, color="#4CAF50", alpha=0.85, label="Short Baskısı", zorder=3)
+
+        # Güncel fiyat çizgisi
+        if low_24h <= fiyat <= high_24h:
+            fiyat_idx = (fiyat - low_24h) / adim
+            ax.axvline(x=fiyat_idx - 0.5, color="#5B9CF6", linewidth=1.5,
+                       linestyle="--", zorder=4, label=f"Fiyat ${fiyat:,.0f}")
+
+        # Stil
+        ax.set_xticks(x)
+        ax.set_xticklabels(bant_etiketleri, fontsize=7, color="#9CA3AF", rotation=30, ha="right")
+        ax.set_yticks([])
+        ax.tick_params(colors="#9CA3AF")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#1F2937")
+        ax.yaxis.grid(True, color="#1F2937", linewidth=0.5, zorder=0)
+        ax.set_axisbelow(True)
+
+        sym_kisa = sym.replace("USDT", "")
+        emoji    = "₿" if "BTC" in sym else "Ξ"
+        if TR_TZ:
+            zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
+        else:
+            zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
+
+        ax.set_title(f"{emoji} {sym_kisa}/USDT — Likidisyon Baskı Haritası\n"
+                     f"Binance Futures  ·  {zaman_str}",
+                     color="#E8E8E6", fontsize=9, pad=8)
+
+        legend = ax.legend(fontsize=7, facecolor="#111827", edgecolor="#1F2937",
+                           labelcolor="#9CA3AF", loc="upper right")
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                    facecolor="#0A0E1A", edgecolor="none")
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        print(f"[LIQ] Gorsel hatasi: {e}")
+        return None
+
+
+def _liq_yorum(veri):
+    """Otomatik yorum üret."""
+    funding  = veri["funding"]
+    degisim  = veri["degisim"]
+    oi_deg   = veri["oi_degisim"]
+    fiyat    = veri["fiyat"]
+    high_24h = veri["high_24h"]
+    low_24h  = veri["low_24h"]
+    sym_kisa = veri["symbol"].replace("USDT", "")
+    emoji    = "₿" if "BTC" in veri["symbol"] else "Ξ"
+
+    satirlar = [f"📊 <b>{emoji} {sym_kisa} Likidisyon Baskı Yorumu</b>\n"]
+
+    # Funding Rate
+    if funding > 0.01:
+        satirlar.append(f"💚 Funding Rate: <b>+{funding:.4f}%</b> — Long ağırlıklı, short squeeze riski var")
+    elif funding < -0.01:
+        satirlar.append(f"❤️ Funding Rate: <b>{funding:.4f}%</b> — Short ağırlıklı, long squeeze riski var")
+    else:
+        satirlar.append(f"⚪ Funding Rate: <b>{funding:.4f}%</b> — Dengeli pozisyonlanma")
+
+    # OI Değişimi
+    if oi_deg > 3:
+        satirlar.append(f"📈 OI +{oi_deg:.1f}% — Yeni pozisyon açılıyor, volatilite artabilir")
+    elif oi_deg < -3:
+        satirlar.append(f"📉 OI {oi_deg:.1f}% — Pozisyon kapanıyor, volatilite azalabilir")
+    else:
+        satirlar.append(f"➡️ OI {oi_deg:+.1f}% — Sakin seyir")
+
+    # Kritik seviyeler
+    satirlar.append(f"\n🔴 <b>Kritik Long Baskısı:</b> ${low_24h:,.0f} — ${(low_24h + (high_24h-low_24h)*0.3):,.0f}")
+    satirlar.append(f"🟢 <b>Kritik Short Baskısı:</b> ${(low_24h + (high_24h-low_24h)*0.7):,.0f} — ${high_24h:,.0f}")
+
+    # OI toplam
+    if veri["oi_toplam"] >= 1e9:
+        oi_str = f"${veri['oi_toplam']/1e9:.2f}B"
+    else:
+        oi_str = f"${veri['oi_toplam']/1e6:.0f}M"
+    satirlar.append(f"\n💰 Toplam OI: <b>{oi_str}</b>  |  24s: <b>{degisim:+.2f}%</b>")
+
+    return "\n".join(satirlar)
+
+
+def _liq_gonder():
+    """BTC ve ETH için likidisyon baskı haritası gönder."""
+    print("[LIQ] Likidisyon raporu basliyor...")
+    for symbol in ["BTCUSDT", "ETHUSDT"]:
+        try:
+            veri = _liq_veri_cek(symbol)
+            if not veri:
+                continue
+            img = _liq_gorsel(veri)
+            if img:
+                sym_kisa = symbol.replace("USDT", "")
+                if TR_TZ:
+                    zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
+                else:
+                    zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
+                _topic_foto_gonder_filigranli(TOPIC_ANALIZ, img,
+                    f"📊 {sym_kisa} Likidisyon Baskı Haritası — {zaman_str}")
+            yorum = _liq_yorum(veri)
+            _telegram_topic_mesaj_gonder(TOPIC_ANALIZ, yorum)
+            print(f"[LIQ] {symbol} gonderildi.")
+            time.sleep(3)
+        except Exception as e:
+            print(f"[LIQ] {symbol} hata: {e}")
+
+
+def _liq_zamanlayici():
+    """Her saat başında likidisyon raporu gönder."""
+    import datetime as dt_mod
+    print("[LIQ] Zamanlayici basladi.")
+    while True:
+        try:
+            if TR_TZ:
+                simdi = datetime.now(tz=TR_TZ)
+            else:
+                simdi = datetime.utcnow()
+            sonraki = (simdi.replace(minute=0, second=0, microsecond=0)
+                       + dt_mod.timedelta(hours=1))
+            bekle = (sonraki - simdi).total_seconds()
+            print(f"[LIQ] Sonraki rapor: {sonraki.strftime('%H:%M')} ({int(bekle//60)} dk sonra)")
+            time.sleep(bekle)
+            _liq_gonder()
+            time.sleep(10)
+        except Exception as e:
+            print(f"[LIQ] Zamanlayici hata: {e}")
+            time.sleep(60)
+
+
+
     print(f"[OI] Zamanlayici basladi. Interval: {WHALE_OI_INTERVAL} dakika.")
     time.sleep(60)
     oi, fiyat = _oi_cek("BTCUSDT")
@@ -3244,6 +3502,7 @@ threading.Thread(target=_haber_zamanlayici, daemon=True).start()
 threading.Thread(target=_oi_zamanlayici, daemon=True).start()
 threading.Thread(target=_istatistik_zamanlayici, daemon=True).start()
 threading.Thread(target=_hl_zamanlayici, daemon=True).start()
+threading.Thread(target=_liq_zamanlayici, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
