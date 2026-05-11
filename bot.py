@@ -671,18 +671,21 @@ def istatistik_mesaji(snapshot=None):
             bugun_kayitlar = [s for s in gunluk_sinyaller if s["gun"] == bugun]
             tum_kayitlar   = list(gunluk_sinyaller)
 
-    # En başarılı sembol (bugün, min 3 sinyal)
+    # En başarılı sembol — rapor görseli ile aynı mantık
     sym_stats = {}
     for s in bugun_kayitlar:
         sym = sembol_grup(s["symbol"])
         if sym not in sym_stats:
             sym_stats[sym] = {"toplam": 0, "basarili": 0}
         sym_stats[sym]["toplam"] += 1
-        if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
+        tp_ok = any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"])
+        if tp_ok:
             sym_stats[sym]["basarili"] += 1
 
+    # Başarı oranı: basarili / toplam (devam edenler dahil — görsel ile aynı)
     en_sym = max(
-        ((sym, st["basarili"]/st["toplam"]*100) for sym, st in sym_stats.items() if st["toplam"] >= 3),
+        ((sym, round(st["basarili"]/st["toplam"]*100, 1))
+         for sym, st in sym_stats.items() if st["toplam"] >= 3),
         key=lambda x: x[1], default=("", -1)
     )
 
@@ -692,14 +695,16 @@ def istatistik_mesaji(snapshot=None):
     tf_stats = {}
     for s in bugun_kayitlar:
         tf = s.get("timeframe","?")
-        if tf not in tf_stats:
-            tf_stats[tf] = {"toplam": 0, "basarili": 0}
-        tf_stats[tf]["toplam"] += 1
+        tf_goster = tf_map_g.get(str(tf), str(tf))
+        if tf_goster not in tf_stats:
+            tf_stats[tf_goster] = {"toplam": 0, "basarili": 0}
+        tf_stats[tf_goster]["toplam"] += 1
         if any(s.get(k) is True for k in ["tp1_ok","tp2_ok","tp3_ok","tp4_ok","tp5_ok"]):
-            tf_stats[tf]["basarili"] += 1
+            tf_stats[tf_goster]["basarili"] += 1
 
     en_tf = max(
-        ((tf_map_g.get(tf,tf), st["basarili"]/st["toplam"]*100) for tf, st in tf_stats.items() if st["toplam"] >= 3),
+        ((tf, round(st["basarili"]/st["toplam"]*100, 1))
+         for tf, st in tf_stats.items() if st["toplam"] >= 3),
         key=lambda x: x[1], default=("", -1)
     )
 
