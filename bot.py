@@ -1869,7 +1869,7 @@ def _oi_zamanlayici():
 def _liq_veri_cek(symbol):
     """BTC/ETH için funding rate, OI geçmişi, kline ve ticker çek."""
     try:
-        sym = symbol  # BTCUSDT veya ETHUSDT
+        sym = symbol
 
         # 1) Funding Rate
         r1 = requests.get("https://fapi.binance.com/fapi/v1/fundingRate",
@@ -1879,7 +1879,7 @@ def _liq_veri_cek(symbol):
         # 2) 24h Ticker
         r2 = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr",
                           params={"symbol": sym}, timeout=6)
-        ticker = r2.json() if r2.status_code == 200 else {}
+        ticker   = r2.json() if r2.status_code == 200 else {}
         fiyat    = float(ticker.get("lastPrice", 0))
         high_24h = float(ticker.get("highPrice", 0))
         low_24h  = float(ticker.get("lowPrice", 0))
@@ -1888,7 +1888,7 @@ def _liq_veri_cek(symbol):
         # 3) OI Geçmişi (24 saat, 1 saatlik)
         r3 = requests.get("https://fapi.binance.com/futures/data/openInterestHist",
                           params={"symbol": sym, "period": "1h", "limit": 24}, timeout=6)
-        oi_list = r3.json() if r3.status_code == 200 else []
+        oi_list   = r3.json() if r3.status_code == 200 else []
         oi_toplam = float(oi_list[-1]["sumOpenInterestValue"]) if oi_list else 0
         oi_onceki = float(oi_list[0]["sumOpenInterestValue"]) if len(oi_list) > 1 else oi_toplam
         oi_degisim = ((oi_toplam - oi_onceki) / oi_onceki * 100) if oi_onceki > 0 else 0
@@ -1897,6 +1897,43 @@ def _liq_veri_cek(symbol):
         r4 = requests.get("https://fapi.binance.com/fapi/v1/klines",
                           params={"symbol": sym, "interval": "1h", "limit": 24}, timeout=6)
         klines = r4.json() if r4.status_code == 200 else []
+
+        # 5) Klines 4h (24 adet) — momentum için
+        r5 = requests.get("https://fapi.binance.com/fapi/v1/klines",
+                          params={"symbol": sym, "interval": "4h", "limit": 24}, timeout=6)
+        klines_4h = r5.json() if r5.status_code == 200 else []
+
+        # 6) Destek/Direnç — 1h pivot noktaları
+        destek    = None
+        direnc    = None
+        if len(klines) >= 20:
+            highs = [float(k[2]) for k in klines[-20:]]
+            lows  = [float(k[3]) for k in klines[-20:]]
+            # Son 20 mumun en önemli seviyeleri
+            destek = sorted(lows)[:3]    # En düşük 3 seviye
+            direnc = sorted(highs)[-3:]  # En yüksek 3 seviye
+
+        # 7) 4H Momentum — son 6 x 4h mumun hacim ve yön analizi
+        momentum_4h = None
+        if len(klines_4h) >= 6:
+            son_6 = klines_4h[-6:]
+            alinlar  = sum(float(k[5]) for k in son_6 if float(k[4]) > float(k[1]))  # kapanış > açılış
+            satilanlar = sum(float(k[5]) for k in son_6 if float(k[4]) <= float(k[1]))
+            toplam_hacim = alinlar + satilanlar
+            if toplam_hacim > 0:
+                alis_pct = alinlar / toplam_hacim * 100
+            else:
+                alis_pct = 50
+            # Son 4h mum değişimi
+            ilk_4h_acilis = float(son_6[0][1])
+            son_4h_kapanis = float(son_6[-1][4])
+            momentum_pct = (son_4h_kapanis - ilk_4h_acilis) / ilk_4h_acilis * 100 if ilk_4h_acilis > 0 else 0
+            momentum_4h = {
+                "alis_pct": alis_pct,
+                "satis_pct": 100 - alis_pct,
+                "momentum_pct": momentum_pct,
+                "toplam_hacim": toplam_hacim,
+            }
 
         return {
             "symbol": sym,
@@ -1909,6 +1946,10 @@ def _liq_veri_cek(symbol):
             "oi_degisim": oi_degisim,
             "oi_list": oi_list,
             "klines": klines,
+            "klines_4h": klines_4h,
+            "destek": destek,
+            "direnc": direnc,
+            "momentum_4h": momentum_4h,
         }
     except Exception as e:
         print(f"[LIQ] {symbol} veri hatasi: {e}")
@@ -2013,36 +2054,61 @@ def _liq_gorsel(veri):
 
 def _liq_yorum(veri):
     """Otomatik yorum üret."""
-    funding  = veri["funding"]
-    degisim  = veri["degisim"]
-    oi_deg   = veri["oi_degisim"]
-    fiyat    = veri["fiyat"]
-    high_24h = veri["high_24h"]
-    low_24h  = veri["low_24h"]
-    sym_kisa = veri["symbol"].replace("USDT", "")
-    emoji    = "₿" if "BTC" in veri["symbol"] else "Ξ"
+    funding   = veri["funding"]
+    degisim   = veri["degisim"]
+    oi_deg    = veri["oi_degisim"]
+    fiyat     = veri["fiyat"]
+    high_24h  = veri["high_24h"]
+    low_24h   = veri["low_24h"]
+    destek    = veri.get("destek")
+    direnc    = veri.get("direnc")
+    mom       = veri.get("momentum_4h")
+    sym_kisa  = veri["symbol"].replace("USDT", "")
+    emoji     = "₿" if "BTC" in veri["symbol"] else "Ξ"
+
+    def fmt(p):
+        return f"${p:,.0f}" if p >= 100 else f"${p:,.2f}"
 
     satirlar = [f"📊 <b>{emoji} {sym_kisa} Likidisyon Baskı Yorumu</b>\n"]
 
     # Funding Rate
     if funding > 0.01:
-        satirlar.append(f"💚 Funding Rate: <b>+{funding:.4f}%</b> — Long ağırlıklı, short squeeze riski var")
+        satirlar.append(f"💚 Funding: <b>+{funding:.4f}%</b> — Long ağırlıklı, short squeeze riski")
     elif funding < -0.01:
-        satirlar.append(f"❤️ Funding Rate: <b>{funding:.4f}%</b> — Short ağırlıklı, long squeeze riski var")
+        satirlar.append(f"❤️ Funding: <b>{funding:.4f}%</b> — Short ağırlıklı, long squeeze riski")
     else:
-        satirlar.append(f"⚪ Funding Rate: <b>{funding:.4f}%</b> — Dengeli pozisyonlanma")
+        satirlar.append(f"⚪ Funding: <b>{funding:.4f}%</b> — Dengeli pozisyonlanma")
 
     # OI Değişimi
     if oi_deg > 3:
-        satirlar.append(f"📈 OI +{oi_deg:.1f}% — Yeni pozisyon açılıyor, volatilite artabilir")
+        satirlar.append(f"📈 OI <b>+{oi_deg:.1f}%</b> — Yeni pozisyon açılıyor")
     elif oi_deg < -3:
-        satirlar.append(f"📉 OI {oi_deg:.1f}% — Pozisyon kapanıyor, volatilite azalabilir")
+        satirlar.append(f"📉 OI <b>{oi_deg:.1f}%</b> — Pozisyon kapanıyor")
     else:
-        satirlar.append(f"➡️ OI {oi_deg:+.1f}% — Sakin seyir")
+        satirlar.append(f"➡️ OI <b>{oi_deg:+.1f}%</b> — Sakin seyir")
 
-    # Kritik seviyeler
-    satirlar.append(f"\n🔴 <b>Kritik Long Baskısı:</b> ${low_24h:,.0f} — ${(low_24h + (high_24h-low_24h)*0.3):,.0f}")
-    satirlar.append(f"🟢 <b>Kritik Short Baskısı:</b> ${(low_24h + (high_24h-low_24h)*0.7):,.0f} — ${high_24h:,.0f}")
+    # 4H Momentum
+    if mom:
+        m_pct  = mom["momentum_pct"]
+        a_pct  = mom["alis_pct"]
+        if m_pct > 1.5:
+            satirlar.append(f"🚀 4H Momentum: <b>+{m_pct:.1f}%</b> — Güçlü yükseliş (%{a_pct:.0f} alıcı)")
+        elif m_pct < -1.5:
+            satirlar.append(f"🔻 4H Momentum: <b>{m_pct:.1f}%</b> — Güçlü düşüş (%{100-a_pct:.0f} satıcı)")
+        elif a_pct > 60:
+            satirlar.append(f"📊 4H Momentum: <b>{m_pct:+.1f}%</b> — Alıcı ağırlıklı (%{a_pct:.0f})")
+        elif a_pct < 40:
+            satirlar.append(f"📊 4H Momentum: <b>{m_pct:+.1f}%</b> — Satıcı ağırlıklı (%{100-a_pct:.0f})")
+        else:
+            satirlar.append(f"📊 4H Momentum: <b>{m_pct:+.1f}%</b> — Dengeli")
+
+    # Destek / Direnç
+    satirlar.append("")
+    if destek and direnc:
+        satirlar.append(f"🔴 <b>Likidisyon Long Baskısı:</b> {fmt(low_24h)} — {fmt(low_24h + (high_24h-low_24h)*0.3)}")
+        satirlar.append(f"🟢 <b>Likidisyon Short Baskısı:</b> {fmt(low_24h + (high_24h-low_24h)*0.7)} — {fmt(high_24h)}")
+        satirlar.append(f"🛡 <b>Destek:</b> {fmt(destek[0])} / {fmt(destek[1])}")
+        satirlar.append(f"🎯 <b>Direnç:</b> {fmt(direnc[-1])} / {fmt(direnc[-2])}")
 
     # OI toplam
     if veri["oi_toplam"] >= 1e9:
