@@ -671,9 +671,13 @@ def istatistik_mesaji(snapshot=None):
             bugun_kayitlar = [s for s in gunluk_sinyaller if s["gun"] == bugun]
             tum_kayitlar   = list(gunluk_sinyaller)
 
-    # En başarılı sembol — rapor görseli ile aynı mantık
+    # En başarılı sembol — rapor görseli ile aynı timeframe'ler
+    RAPOR_TF = {"1","5","15","60","240","D"}  # Görsel raporda gösterilen TF'ler
     sym_stats = {}
     for s in bugun_kayitlar:
+        tf = str(s.get("timeframe","?"))
+        if tf not in RAPOR_TF:
+            continue  # Görsel raporda gösterilmeyen TF'leri atla
         sym = sembol_grup(s["symbol"])
         if sym not in sym_stats:
             sym_stats[sym] = {"toplam": 0, "basarili": 0}
@@ -682,24 +686,24 @@ def istatistik_mesaji(snapshot=None):
         if tp_ok:
             sym_stats[sym]["basarili"] += 1
 
-    # Debug — sembol istatistiklerini logla
+    # Debug log
     for sym, st in sorted(sym_stats.items(), key=lambda x: x[1]["toplam"], reverse=True):
         print(f"[ISTATISTIK] {sym}: {st['basarili']}/{st['toplam']} = %{round(st['basarili']/st['toplam']*100,1) if st['toplam']>0 else 0}")
 
-    # Başarı oranı: basarili / toplam (devam edenler dahil — görsel ile aynı)
     en_sym = max(
         ((sym, round(st["basarili"]/st["toplam"]*100, 1))
          for sym, st in sym_stats.items() if st["toplam"] >= 3),
         key=lambda x: x[1], default=("", -1)
     )
 
-    # En başarılı zaman dilimi (bugün, min 3 sinyal)
-    tf_map_g = {"1":"1DK","3":"3DK","5":"5DK","15":"15DK","30":"30DK",
-                "60":"1SA","1H":"1SA","240":"4SA","D":"1G","1D":"1G"}
+    # En başarılı zaman dilimi — sadece görsel rapordaki TF'ler
+    tf_map_g = {"1":"1DK","5":"5DK","15":"15DK","60":"1SA","240":"4SA","D":"1G"}
     tf_stats = {}
     for s in bugun_kayitlar:
-        tf = s.get("timeframe","?")
-        tf_goster = tf_map_g.get(str(tf), str(tf))
+        tf = str(s.get("timeframe","?"))
+        if tf not in tf_map_g:
+            continue  # Görsel raporda gösterilmeyen TF'leri atla
+        tf_goster = tf_map_g[tf]
         if tf_goster not in tf_stats:
             tf_stats[tf_goster] = {"toplam": 0, "basarili": 0}
         tf_stats[tf_goster]["toplam"] += 1
