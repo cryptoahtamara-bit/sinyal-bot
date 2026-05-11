@@ -2408,12 +2408,14 @@ def _hl_gorsel(isim, adres, pozlar, zaman_str):
 
 
 def _hl_mesaj_olustur(isim, adres, coin, olay, szi, entry_px, pnl=None, onceki_szi=None):
-    """Hyperliquid pozisyon değişikliği bildirimi — kompakt format."""
-    yon     = "🟢 L" if szi > 0 else "🔴 S"
-    szi_abs = abs(szi)
-    usd     = szi_abs * entry_px
+    """Hyperliquid pozisyon değişikliği bildirimi — kompakt grid format."""
+    yon      = "LONG" if szi > 0 else "SHORT"
+    szi_abs  = abs(szi)
+    usd      = szi_abs * entry_px
 
-    if usd >= 1e6:
+    if usd >= 1e9:
+        usd_str = f"${usd/1e9:.2f}B"
+    elif usd >= 1e6:
         usd_str = f"${usd/1e6:.1f}M"
     else:
         usd_str = f"${usd/1e3:.0f}K"
@@ -2425,41 +2427,40 @@ def _hl_mesaj_olustur(isim, adres, coin, olay, szi, entry_px, pnl=None, onceki_s
     else:
         px_str = f"${entry_px:.4f}"
 
-    pnl_str = ""
-    if pnl is not None:
-        pnl_str = f"+${pnl/1e3:.1f}K" if pnl >= 0 else f"-${abs(pnl)/1e3:.1f}K"
-
     if olay == "ACILDI":
-        baslik = f"🐋 YENİ POZİSYON — {isim}"
+        olay_str = "Yeni Pozisyon"
     elif olay == "KAPATILDI":
-        baslik = f"🚪 POZİSYON KAPATILDI — {isim}"
+        olay_str = "Pozisyon Kapandı"
     else:
-        baslik = f"📊 POZİSYON DEĞİŞTİ — {isim}"
+        olay_str = "Pozisyon Değişti"
 
     if TR_TZ:
         zaman_str = datetime.now(tz=TR_TZ).strftime("%d %b %Y %H:%M")
     else:
         zaman_str = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
 
-    ayrac = "─" * 28
-    coin_pad = coin[:8].ljust(8)
-    satir = f"{yon} {coin_pad} {usd_str:>7}  @{px_str}"
-    if pnl_str:
-        satir += f"  PnL:{pnl_str:>9}"
+    yon_emoji = "🟢" if szi > 0 else "🔴"
 
     mesaj = (
-        f"<b>{baslik}</b>\n"
-        f"<code>{adres[:20]}...</code>\n"
-        f"🕐 {zaman_str}\n"
-        f"{ayrac}\n"
-        f"<pre>{satir}"
+        f"🐋 <b>{isim} — {olay_str}</b>\n"
+        f"<code>{adres[:20]}...</code> · {zaman_str}\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"{yon_emoji} <b>{coin}/USDC</b> · {yon}\n"
+        f"💰 <b>{usd_str}</b>   📌 {px_str}"
     )
 
-    if olay == "DEGISTI" and onceki_szi is not None:
+    if onceki_szi is not None and olay == "DEGISTI":
         degisim_pct = (szi - onceki_szi) / abs(onceki_szi) * 100 if onceki_szi != 0 else 0
-        mesaj += f"\n  Önceki: {abs(onceki_szi):.4f} → {szi_abs:.4f} ({degisim_pct:+.0f}%)"
+        mesaj += f"\n📊 {abs(onceki_szi):,.2f} → {szi_abs:,.2f} {coin} ({degisim_pct:+.0f}%)"
 
-    mesaj += "</pre>"
+    if pnl is not None and olay != "ACILDI":
+        pnl_emoji = "✅" if pnl >= 0 else "❌"
+        if abs(pnl) >= 1e3:
+            pnl_str = f"+${pnl/1e3:.1f}K" if pnl >= 0 else f"-${abs(pnl)/1e3:.1f}K"
+        else:
+            pnl_str = f"+${pnl:.0f}" if pnl >= 0 else f"-${abs(pnl):.0f}"
+        mesaj += f"\n{pnl_emoji} PnL: {pnl_str}"
+
     return mesaj
 
 
