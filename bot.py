@@ -618,12 +618,13 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal,
 # İSTATİSTİK
 # ==========================================
 
-def istatistik_hesapla(gun_filtre=None):
-    with gunluk_kilit:
-        kayitlar = [
-            s for s in gunluk_sinyaller
-            if gun_filtre is None or s["gun"] == gun_filtre
-        ]
+def istatistik_hesapla(gun_filtre=None, snapshot=None):
+    if snapshot is not None:
+        kayitlar = [s for s in snapshot if gun_filtre is None or s["gun"] == gun_filtre]
+    else:
+        with gunluk_kilit:
+            kayitlar = [s for s in gunluk_sinyaller
+                        if gun_filtre is None or s["gun"] == gun_filtre]
     tp_basarili   = 0
     sl_tetiklenen = 0
     devam_eden    = 0
@@ -657,13 +658,18 @@ def istatistik_hesapla(gun_filtre=None):
     }
 
 
-def istatistik_mesaji():
+def istatistik_mesaji(snapshot=None):
     bugun = gun_str()
-    b     = istatistik_hesapla(gun_filtre=bugun)
-    t     = istatistik_hesapla()
+    b     = istatistik_hesapla(gun_filtre=bugun, snapshot=snapshot)
+    t     = istatistik_hesapla(snapshot=snapshot)
 
-    with gunluk_kilit:
-        bugun_kayitlar = [s for s in gunluk_sinyaller if s["gun"] == bugun]
+    if snapshot is not None:
+        bugun_kayitlar = [s for s in snapshot if s["gun"] == bugun]
+        tum_kayitlar   = snapshot
+    else:
+        with gunluk_kilit:
+            bugun_kayitlar = [s for s in gunluk_sinyaller if s["gun"] == bugun]
+            tum_kayitlar   = list(gunluk_sinyaller)
 
     # En başarılı sembol (bugün, min 3 sinyal)
     sym_stats = {}
@@ -698,8 +704,11 @@ def istatistik_mesaji():
     )
 
     # Tüm zamanlar en başarılı sembol (min 5 sinyal)
-    with gunluk_kilit:
-        tum_kayitlar = list(gunluk_sinyaller)
+    if snapshot is not None:
+        tum_kayitlar = snapshot
+    else:
+        with gunluk_kilit:
+            tum_kayitlar = list(gunluk_sinyaller)
 
     sym_stats_t = {}
     for s in tum_kayitlar:
@@ -776,9 +785,12 @@ def sembol_grup(symbol: str) -> str:
     return "OTHERS"
 
 
-def rapor_hesapla(gun: str):
-    with gunluk_kilit:
-        kayitlar = [s for s in gunluk_sinyaller if s["gun"] == gun]
+def rapor_hesapla(gun: str, snapshot=None):
+    if snapshot is not None:
+        kayitlar = [s for s in snapshot if s["gun"] == gun]
+    else:
+        with gunluk_kilit:
+            kayitlar = [s for s in gunluk_sinyaller if s["gun"] == gun]
 
     tf_siralama = ["1","5","15","60","240","D"]
     tf_goster   = {"1":"1DK","5":"5DK","15":"15DK","60":"1SA","240":"4SA","D":"1G"}
@@ -902,7 +914,7 @@ def rapor_mesaji(gun: str) -> str:
     return msg
 
 
-def rapor_gorsel(gun: str):
+def rapor_gorsel(gun: str, snapshot=None):
     """Raporu koyu tema PNG olarak üretir — 5 kart + devam eden hücrelerde."""
     try:
         import matplotlib
@@ -913,7 +925,7 @@ def rapor_gorsel(gun: str):
     except ImportError:
         return None
 
-    matris, toplam_satir, tf_kullanilan, tf_goster, kayitlar = rapor_hesapla(gun)
+    matris, toplam_satir, tf_kullanilan, tf_goster, kayitlar = rapor_hesapla(gun, snapshot=snapshot)
     if not kayitlar:
         return None
 
@@ -2744,10 +2756,13 @@ def _istatistik_zamanlayici():
             print(f"[ISTATISTIK] Sonraki: {sonraki.strftime('%H:%M')} ({int(bekle//60)} dk sonra)")
             time.sleep(bekle)
             bugun = gun_str()
+            # Aynı anda snapshot al — ikisi de aynı veriyi kullansın
+            with gunluk_kilit:
+                snapshot = list(gunluk_sinyaller)
             # 1) İstatistik metni
-            _telegram_topic_mesaj_gonder(TOPIC_RAPOR, istatistik_mesaji())
+            _telegram_topic_mesaj_gonder(TOPIC_RAPOR, istatistik_mesaji(snapshot=snapshot))
             # 2) Günlük rapor görseli
-            img = rapor_gorsel(bugun)
+            img = rapor_gorsel(bugun, snapshot=snapshot)
             if img:
                 _topic_foto_gonder_filigranli(TOPIC_RAPOR, img, f"Günlük Rapor — {bugun}")
             time.sleep(10)
