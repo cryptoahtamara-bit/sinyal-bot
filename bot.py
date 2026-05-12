@@ -46,9 +46,26 @@ def tp_sure(timeframe: str) -> int:
     if tf in ["W", "1W"]:      return 172800
     return 30
 
-son_sinyal      = {"key": "", "zaman": 0}
+son_sinyal       = {"key": "", "zaman": 0}
 gunluk_sinyaller = []
-gunluk_kilit    = threading.Lock()
+gunluk_kilit     = threading.Lock()
+
+# Acik pozisyon takibi (sembol -> pozisyon bilgisi)
+aktif_pozisyonlar = {}
+pozisyon_kilit    = threading.Lock()
+
+def _mexc_bildirim_ozel(symbol, sinyal, mesaj_ek):
+    """Ozel durum bildirimlerini MEXC bildirim kanalina gonderir."""
+    base  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+    hedef = MEXC_NOTIFY_CHAT_ID if MEXC_NOTIFY_CHAT_ID else TELEGRAM_CHAT_ID
+    yon   = "🟢 LONG" if any(x in sinyal.upper() for x in ["BUY","LONG"]) else "🔴 SHORT"
+    mesaj = f"⚡ <b>{symbol}</b> | {yon}\n\n{mesaj_ek}"
+    try:
+        requests.post(f"{base}/sendMessage",
+            json={"chat_id": hedef, "text": mesaj, "parse_mode": "HTML"},
+            timeout=15)
+    except Exception as e:
+        print(f"[BILDIRIM] Hata: {e}")
 
 def gun_str(ts=None):
     if TR_TZ:
@@ -632,22 +649,98 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal, tp1, tp2, 
         s_upper = sinyal.upper()
         is_trade_signal = any(x in s_upper for x in ["BUY","SELL","LONG","SHORT"])
         if is_trade_signal:
-            sonuc = mexc_place_order(symbol, sinyal, price, tp1, tp2, tp3, sl)
-            if sonuc["success"]:
-                mexc_bildirim_gonder(
-                    symbol, sinyal,
-                    vol=sonuc["vol"], leverage=sonuc["leverage"],
-                    margin=TRADE_MARGIN_USDT, order_id=sonuc["order_id"],
-                    price=price, tp1=tp1, sl=sl,
-                    mark_price=sonuc.get("mark_price")
-                )
+            is_long_signal = any(x in s_upper for x in ["BUY","LONG"])
+            sym_key        = get_sym(symbol)
+
+            # Mark Price al
+            mark_price = mexc_get_mark_price(symbol)
+
+            # SENARYO 3: TP1 zaten gecilmis mi?
+            tp1_gecildi = False
+            if tp1 and mark_price:
+                try:
+                    tp1_f = float(str(tp1).replace(",", "."))
+                    if is_long_signal and mark_price >= tp1_f:
+                        tp1_gecildi = True
+                    elif not is_long_signal and mark_price <= tp1_f:
+                        tp1_gecildi = True
+                except:
+                    pass
+
+            if tp1_gecildi:
+                msg = "\u26a0\ufe0f TP1 zaten gecildi, emir acilmadi\n"
+                msg += f"Mark Price: {fmt_fiyat(mark_price)} | TP1: {fmt_fiyat(tp1)}"
+                _mexc_bildirim_ozel(symbol, sinyal, msg)
             else:
-                mexc_bildirim_gonder(
-                    symbol, sinyal,
-                    vol=0, leverage=0, margin=TRADE_MARGIN_USDT, order_id="",
-                    price=price, tp1=tp1, sl=sl,
-                    hata_msg=sonuc["msg"]
-                )
+                with pozisyon_kilit:
+                    mevcut = aktif_pozisyonlar.get(sym_key)
+
+                if mevcut:
+                    mevcut_long = mevcut["is_long"]
+                    if mevcut_long == is_long_signal:
+                        # SENARYO 1: Ayni yonde sinyal, atla
+                        yon_str = "🟢 LONG" if mevcut_long else "🔴 SHORT"
+                        msg = "\u26a0\ufe0f Zaten bu yonde acik pozisyon var, atlandi\n"
+                        msg += f"Mevcut: {yon_str} ({mevcut['timeframe']} | {mevcut['sinyal']})"
+                        _mexc_bildirim_ozel(symbol, sinyal, msg)
+                    else:
+                        # SENARYO 2: Ters yon, HEDGE
+                        sonuc = mexc_place_order(symbol, sinyal, price, tp1, tp2, tp3, sl)
+                        if sonuc["success"]:
+                            with pozisyon_kilit:
+                                aktif_pozisyonlar[sym_key + "_HEDGE"] = {
+                                    "is_long":   is_long_signal,
+                                    "timeframe": timeframe,
+                                    "sinyal":    sinyal,
+                                    "order_id":  sonuc["order_id"],
+                                    "vol":       sonuc["vol"],
+                                    "tp1":       tp1,
+                                    "sl":        sl,
+                                }
+                            yon_yeni   = "🟢 LONG" if is_long_signal else "🔴 SHORT"
+                            yon_mevcut = "🟢 LONG" if mevcut_long else "🔴 SHORT"
+                            msg  = "\U0001f504 HEDGE Pozisyon Acildi\n\n"
+                            msg += f"⚡ {symbol}"
+                            msg += f"{yon_mevcut} hala acik"
+                            msg += f"{yon_yeni} acildi \u2014 HEDGE\n\n"
+                            msg += f"Her iki pozisyon kendi TP/SL'i ile calisiyor."
+                            msg += f"🆔 Order ID: <code>{sonuc['order_id']}</code>"
+                            _mexc_bildirim_ozel(symbol, sinyal, msg)
+                        else:
+                            mexc_bildirim_gonder(
+                                symbol, sinyal,
+                                vol=0, leverage=0, margin=TRADE_MARGIN_USDT, order_id="",
+                                price=price, tp1=tp1, sl=sl,
+                                hata_msg=sonuc["msg"]
+                            )
+                else:
+                    # Normal islem, acik pozisyon yok
+                    sonuc = mexc_place_order(symbol, sinyal, price, tp1, tp2, tp3, sl)
+                    if sonuc["success"]:
+                        with pozisyon_kilit:
+                            aktif_pozisyonlar[sym_key] = {
+                                "is_long":   is_long_signal,
+                                "timeframe": timeframe,
+                                "sinyal":    sinyal,
+                                "order_id":  sonuc["order_id"],
+                                "vol":       sonuc["vol"],
+                                "tp1":       tp1,
+                                "sl":        sl,
+                            }
+                        mexc_bildirim_gonder(
+                            symbol, sinyal,
+                            vol=sonuc["vol"], leverage=sonuc["leverage"],
+                            margin=TRADE_MARGIN_USDT, order_id=sonuc["order_id"],
+                            price=price, tp1=tp1, sl=sl,
+                            mark_price=sonuc.get("mark_price")
+                        )
+                    else:
+                        mexc_bildirim_gonder(
+                            symbol, sinyal,
+                            vol=0, leverage=0, margin=TRADE_MARGIN_USDT, order_id="",
+                            price=price, tp1=tp1, sl=sl,
+                            hata_msg=sonuc["msg"]
+                        )
     # ──────────────────────────────────────────────────────────────────────
 
     if message_id and any([tp1, tp2, tp3]):
