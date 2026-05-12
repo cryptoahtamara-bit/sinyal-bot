@@ -414,14 +414,37 @@ def mexc_set_leverage(symbol: str, leverage: int) -> bool:
         print(f"[MEXC] Leverage istek hatasi: {e}")
         return False
 
+def mexc_get_mark_price(symbol: str) -> float:
+    """
+    MEXC Futures Mark Price (Fair Price) çeker.
+    Hata durumunda Last Price'a düşer.
+    """
+    sym_raw = get_sym(symbol)
+    base    = sym_raw.replace("USDT", "")
+    sym     = f"{base}_USDT"
+    try:
+        url = f"{MEXC_BASE_URL}/api/v1/contract/detail"
+        r   = requests.get(url, params={"symbol": sym}, timeout=10)
+        data = r.json()
+        if data.get("success"):
+            mark = float(data["data"].get("fairPrice", 0))
+            if mark > 0:
+                print(f"[MEXC] {sym} Mark Price: {mark}")
+                return mark
+    except Exception as e:
+        print(f"[MEXC] Mark price hatasi: {e}")
+    # Fallback: Last Price
+    return get_mexc_price(symbol)
+
 def mexc_place_order(symbol: str, sinyal: str, price: float,
                      tp1=None, tp2=None, tp3=None, sl=None) -> dict:
     """
     MEXC Futures'da market emri açar.
-    - Marjin: TRADE_MARGIN_USDT (env var)
-    - Kaldıraç: sembolün maksimum kaldıracı (API'den otomatik çekilir)
-    - TP: tp1 kullanılır (en yakın hedef)
-    - SL: indikatörden gelen değer
+    - Marjin     : TRADE_MARGIN_USDT (env var)
+    - Kaldıraç   : sembolün maksimum kaldıracı (API'den otomatik çekilir)
+    - Fiyat      : Mark Price (Fair Price) kullanılır
+    - TP         : tp1 gelince pozisyonun TAMAMI kapatılır (triggerPriceType=2 → Mark Price)
+    - SL         : indikatörden gelen değer         (triggerPriceType=2 → Mark Price)
     Dönen dict: {"success": bool, "order_id": str, "msg": str}
     """
     if not MEXC_API_KEY or not MEXC_API_SECRET:
@@ -435,31 +458,28 @@ def mexc_place_order(symbol: str, sinyal: str, price: float,
     # Yön belirle
     s_upper = sinyal.upper()
     is_long = any(x in s_upper for x in ["BUY", "LONG"])
-    side    = 1 if is_long else 2   # 1=open long, 2=open short (MEXC Futures kodu)
+    side    = 1 if is_long else 2   # 1=open long, 2=open short
 
     # Maksimum kaldıraç çek ve ayarla
     max_lev = mexc_get_max_leverage(symbol)
     mexc_set_leverage(symbol, max_lev)
 
-    # Güncel fiyatı al (market emri için lot hesabı)
-    current_price = price
-    if not current_price or current_price == "?":
-        current_price = get_mexc_price(symbol)
-    if not current_price:
-        return {"success": False, "msg": "Fiyat alınamadı"}
+    # Mark Price (Fair Price) ile lot hesabı
+    mark_price = mexc_get_mark_price(symbol)
+    if not mark_price:
+        return {"success": False, "msg": "Mark Price alınamadı"}
     try:
-        current_price = float(str(current_price).replace(",", "."))
+        mark_price = float(str(mark_price).replace(",", "."))
     except:
-        return {"success": False, "msg": f"Geçersiz fiyat: {current_price}"}
+        return {"success": False, "msg": f"Geçersiz Mark Price: {mark_price}"}
 
-    # Lot (kontrat adedi) hesapla: marjin × kaldıraç / fiyat
-    # MEXC Futures'da 1 kontrat = 1 USDT değerinde (inverse hariç lineer kontrat)
+    # Lot hesabı: marjin × kaldıraç / mark_price
     notional = TRADE_MARGIN_USDT * max_lev
-    vol      = round(notional / current_price, 4)
+    vol      = round(notional / mark_price, 4)
     if vol <= 0:
         return {"success": False, "msg": f"Hesaplanan lot sıfır veya negatif: {vol}"}
 
-    # TP fiyatı (tp1 varsa kullan, yoksa None)
+    # TP1 fiyatı — pozisyonun TAMAMI burada kapatılır
     tp_price = None
     if tp1:
         try:
@@ -475,23 +495,31 @@ def mexc_place_order(symbol: str, sinyal: str, price: float,
         except:
             sl_price = None
 
-    # Emir gövdesi (MEXC Futures v1 API)
+    # ── Ana emir gövdesi (MEXC Futures v1 API) ───────────────────────────────
     order_body = {
-        "symbol":     sym,
-        "price":      0,           # market emri için 0
-        "vol":        vol,
-        "side":       side,
-        "type":       5,           # 5 = market order
-        "openType":   1,           # 1 = isolated margin
-        "leverage":   max_lev,
+        "symbol":   sym,
+        "price":    0,      # market emri
+        "vol":      vol,
+        "side":     side,
+        "type":     5,      # 5 = market order
+        "openType": 1,      # 1 = isolated margin
+        "leverage": max_lev,
     }
-    if tp_price:
-        order_body["takeProfitPrice"] = tp_price
-    if sl_price:
-        order_body["stopLossPrice"]   = sl_price
 
-    ts       = str(int(time.time() * 1000))
-    sign_str = MEXC_API_KEY + ts + json.dumps(order_body, separators=(",", ":"))
+    # TP1 → Mark Price tetikleyici, pozisyonun tamamını kapat
+    if tp_price:
+        order_body["takeProfitPrice"]    = tp_price
+        order_body["takeProfitPriceType"] = 2   # 2 = Mark Price (Fair Price)
+        # Tüm pozisyonu kapat: closeVol = vol (açılan lot kadar)
+        order_body["takeProfitVol"]      = vol
+
+    # SL → Mark Price tetikleyici
+    if sl_price:
+        order_body["stopLossPrice"]      = sl_price
+        order_body["stopLossPriceType"]  = 2    # 2 = Mark Price (Fair Price)
+
+    ts        = str(int(time.time() * 1000))
+    sign_str  = MEXC_API_KEY + ts + json.dumps(order_body, separators=(",", ":"))
     signature = hmac.new(
         MEXC_API_SECRET.encode("utf-8"),
         sign_str.encode("utf-8"),
@@ -514,7 +542,8 @@ def mexc_place_order(symbol: str, sinyal: str, price: float,
         if result.get("success"):
             order_id = result.get("data", "")
             return {"success": True, "order_id": str(order_id),
-                    "vol": vol, "leverage": max_lev, "msg": "Emir basarili"}
+                    "vol": vol, "leverage": max_lev,
+                    "mark_price": mark_price, "msg": "Emir basarili"}
         else:
             return {"success": False, "msg": result.get("message", str(result))}
     except Exception as e:
@@ -522,7 +551,7 @@ def mexc_place_order(symbol: str, sinyal: str, price: float,
         return {"success": False, "msg": str(e)}
 
 def mexc_bildirim_gonder(symbol, sinyal, vol, leverage, margin, order_id,
-                          price, tp1, sl, hata_msg=None):
+                          price, tp1, sl, hata_msg=None, mark_price=None):
     """İşlem sonucunu Telegram'a bildirir."""
     base = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
     yon  = "🟢 LONG" if any(x in sinyal.upper() for x in ["BUY","LONG"]) else "🔴 SHORT"
@@ -537,13 +566,15 @@ def mexc_bildirim_gonder(symbol, sinyal, vol, leverage, margin, order_id,
         mesaj = (
             f"✅ <b>MEXC İşlem AÇILDI</b>\n\n"
             f"⚡ {symbol} | {yon}\n"
-            f"💰 Giriş: {fmt_fiyat(price)}\n"
+            f"💰 Giriş (Mark Price): {fmt_fiyat(mark_price or price)}\n"
             f"📦 Lot: {vol} kontrat\n"
             f"⚙️ Kaldıraç: {leverage}x\n"
             f"💵 Marjin: ${margin} USDT\n"
         )
-        if tp1:  mesaj += f"🎯 TP1: {fmt_fiyat(tp1)}\n"
-        if sl:   mesaj += f"🛑 SL: {fmt_fiyat(sl)}\n"
+        if tp1:
+            mesaj += f"🎯 TP1: {fmt_fiyat(tp1)} <i>(Mark Price tetikleyici — tüm pozisyon kapanır)</i>\n"
+        if sl:
+            mesaj += f"🛑 SL: {fmt_fiyat(sl)} <i>(Mark Price tetikleyici)</i>\n"
         mesaj += f"🆔 Order ID: <code>{order_id}</code>"
 
     # Bildirim kanalı: MEXC_NOTIFY_CHAT_ID varsa oraya, yoksa ana kanala gönder
@@ -607,7 +638,8 @@ def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal, tp1, tp2, 
                     symbol, sinyal,
                     vol=sonuc["vol"], leverage=sonuc["leverage"],
                     margin=TRADE_MARGIN_USDT, order_id=sonuc["order_id"],
-                    price=price, tp1=tp1, sl=sl
+                    price=price, tp1=tp1, sl=sl,
+                    mark_price=sonuc.get("mark_price")
                 )
             else:
                 mexc_bildirim_gonder(
