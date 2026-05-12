@@ -13,11 +13,12 @@ load_dotenv()
 
 app = Flask(__name__)
 
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-TELEGRAM_LOG_ID  = os.getenv("TELEGRAM_LOG_ID", "")
-CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
-KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
+TELEGRAM_TOKEN      = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_LOG_ID     = os.getenv("TELEGRAM_LOG_ID", "")
+MEXC_NOTIFY_CHAT_ID = os.getenv("MEXC_NOTIFY_CHAT_ID", "")  # MEXC işlem bildirimleri
+CHARTIMG_KEY        = os.getenv("CHARTIMG_KEY", "")
+KANAL_ADI           = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
 KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
 
 # ── MEXC API ──────────────────────────────────────────────────────────────────
@@ -545,9 +546,11 @@ def mexc_bildirim_gonder(symbol, sinyal, vol, leverage, margin, order_id,
         if sl:   mesaj += f"🛑 SL: {fmt_fiyat(sl)}\n"
         mesaj += f"🆔 Order ID: <code>{order_id}</code>"
 
+    # Bildirim kanalı: MEXC_NOTIFY_CHAT_ID varsa oraya, yoksa ana kanala gönder
+    hedef_kanal = MEXC_NOTIFY_CHAT_ID if MEXC_NOTIFY_CHAT_ID else TELEGRAM_CHAT_ID
     try:
         requests.post(f"{base}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": mesaj, "parse_mode": "HTML"},
+            json={"chat_id": hedef_kanal, "text": mesaj, "parse_mode": "HTML"},
             timeout=15)
     except Exception as e:
         print(f"[MEXC BILDIRIM] Hata: {e}")
