@@ -2,6 +2,3 @@ flask
 requests
 python-dotenv
 pytz
-gunicorn
-Pillow
-matplotlib
