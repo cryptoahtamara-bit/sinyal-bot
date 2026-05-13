@@ -144,12 +144,12 @@ def mexc_place_order(symbol, side, sl=None, tp=None):
     try:
 
         symbol = mexc_format_symbol(symbol)
-    mexc_side = 1 if side.upper() in [
-        "BUY",
-        "LONG",
-        "STRONG BUY"
-    ] else 3
 
+        mexc_side = 1 if side.upper() in [
+            "BUY",
+            "LONG",
+            "STRONG BUY"
+        ] else 3
 
         fiyat = get_mexc_price(symbol.replace("_", ""))
 
