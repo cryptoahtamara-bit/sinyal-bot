@@ -133,8 +133,6 @@ def get_sym(symbol: str) -> str:
     return symbol.upper().replace(".P", "").replace("USDT.P", "USDT")
 # ==========================================
 
-    except Exception as e:
-        print(f"[MEXC TPSL HATA] {e}")
 
 
 def mexc_place_order(symbol, side, sl=None, tp=None):
@@ -1578,33 +1576,37 @@ def webhook():
 
     print(f"[SINYAL] {symbol} {sinyal} @ {price} ({timeframe}) | TP1={tp1} TP2={tp2} TP3={tp3} SL={sl}")
     mesaj = format_mesaj(symbol, price, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl)
-# ==========================================
-# MEXC FUTURES ORDER
-# ==========================================
 
-try:
+    # ==========================================
+    # MEXC FUTURES ORDER
+    # ==========================================
 
-    tp_target = tp1
+    try:
 
-    if tp_target is not None:
-        tp_target = float(str(tp_target).replace(",", "."))
+        tp_target = tp1
 
-    sl_target = sl
+        if tp_target is not None:
+            tp_target = float(str(tp_target).replace(",", "."))
 
-    if sl_target is not None:
-        sl_target = float(str(sl_target).replace(",", "."))
+        sl_target = sl
 
-    mexc_place_order(
-        symbol=symbol,
-        side=sinyal,
-        tp=tp_target,
-        sl=sl_target
-    )
+        if sl_target is not None:
+            sl_target = float(str(sl_target).replace(",", "."))
 
-try:
+        mexc_place_order(
+            symbol=symbol,
+            side=sinyal,
+            tp=tp_target,
+            sl=sl_target
+        )
 
-    send_trade_message(
-        f"""
+    except Exception as e:
+        print(f"[MEXC WEBHOOK HATA] {e}")
+
+    try:
+
+        send_trade_message(
+            f"""
 🚀 MEXC ISLEM ACILDI
 
 📊 {symbol}
@@ -1615,21 +1617,19 @@ try:
 🎯 TP1: {tp1}
 🛑 SL: {sl}
 """
-    )
+        )
 
-except Exception as e:
-    print(f"[TRADE MESAJ HATA] {e}")
+    except Exception as e:
+        print(f"[TRADE MESAJ HATA] {e}")
 
-except Exception as e:
-    print(f"[MEXC WEBHOOK HATA] {e}")
+    t = threading.Thread(
+        target=send_telegram_and_schedule_tp,
+        args=(mesaj, symbol, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl, imageurl, price))
+    t.daemon = True
+    t.start()
 
-t = threading.Thread(
-    target=send_telegram_and_schedule_tp,
-    args=(mesaj, symbol, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl, imageurl, price))
-t.daemon = True
-t.start()
+    return jsonify({"status": "ok"}), 200
 
-return jsonify({"status": "ok"}), 200
 
 @app.route("/health")
 def health():
