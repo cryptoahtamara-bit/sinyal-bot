@@ -10,7 +10,7 @@ try:
     TR_TZ = pytz.timezone("Europe/Istanbul")
 except:
     TR_TZ = None
-
+ 
 load_dotenv()
 # ==========================================
 # MEXC FUTURES
