@@ -28,11 +28,29 @@ app = Flask(__name__)
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_TOKEN = TELEGRAM_TOKEN
 
+BOT_TOKEN = TELEGRAM_TOKEN
+
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_KANAL_ID = os.getenv("TELEGRAM_KANAL_ID", "")  # Eski alarm kanalı
 TELEGRAM_LOG_ID  = os.getenv("TELEGRAM_LOG_ID", "")
 CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
 MEXC_NOTIFY_CHAT_ID = os.getenv("MEXC_NOTIFY_CHAT_ID", "-3990949543")
+
+
+
+# =========================
+# MEXC FIX PATCH v2.3.1
+# =========================
+
+def get_max_leverage(symbol):
+    """
+    MEXC maksimum leverage fallback helper.
+    """
+    try:
+        return 125
+    except Exception:
+        return 20
+
 
 def mexc_format_symbol(symbol):
     """
