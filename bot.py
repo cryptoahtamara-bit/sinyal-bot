@@ -1,4 +1,6 @@
 import os, time, json, re, threading, requests, base64, io
+import hmac
+import hashlib
 from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
@@ -10,6 +12,15 @@ except:
     TR_TZ = None
 
 load_dotenv()
+
+# ==========================================
+# MEXC FUTURES
+# ==========================================
+MEXC_API_KEY = os.getenv("MEXC_API_KEY")
+MEXC_API_SECRET = os.getenv("MEXC_API_SECRET")
+MEXC_MARGIN_USDT = float(os.getenv("MEXC_MARGIN_USDT", "0.25"))
+MEXC_BASE_URL = "https://contract.mexc.com"
+TRADE_CHAT_ID = "-3990949543"
 
 app = Flask(__name__)
 
@@ -1211,6 +1222,69 @@ def parse_plain(raw: str):
     return symbol, price, timeframe, sinyal if sinyal else "SINYAL", tp1, tp2, tp3, tp4, tp5, sl
 
 
+
+
+def send_trade_message(text):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TRADE_CHAT_ID, "text": text}
+        r = requests.post(url, json=payload, timeout=15)
+        print(f"[TRADE TELEGRAM] {r.text}")
+    except Exception as e:
+        print(f"[TRADE TELEGRAM HATA] {e}")
+
+
+def mexc_signature(params: dict):
+    query = "&".join([f"{k}={params[k]}" for k in sorted(params)])
+    return hmac.new(MEXC_API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
+
+
+def get_max_leverage(symbol):
+    try:
+        r = requests.get(f"{MEXC_BASE_URL}/api/v1/contract/detail", timeout=10)
+        data = r.json()
+        for item in data.get("data", []):
+            if item.get("symbol")==symbol:
+                return int(item.get("maxLeverage",50))
+    except Exception as e:
+        print(f"[MEXC LEVERAGE HATA] {e}")
+    return 50
+
+
+def mexc_place_order(symbol, side, sl=None, tp=None):
+    try:
+        symbol=symbol.replace('.P','').replace('USDT','_USDT') if '_' not in symbol else symbol
+        fiyat=get_mexc_price(symbol.replace('_',''))
+        if not fiyat:
+            return
+        leverage=get_max_leverage(symbol)
+        qty=round((MEXC_MARGIN_USDT*leverage)/fiyat,3)
+        timestamp=int(time.time()*1000)
+        payload={
+            "symbol":symbol,
+            "price":fiyat,
+            "vol":qty,
+            "side":1 if 'LONG' in side.upper() or 'BUY' in side.upper() else 3,
+            "type":5,
+            "openType":2,
+            "leverage":leverage,
+            "externalOid":str(timestamp),
+            "timestamp":timestamp
+        }
+        sign=mexc_signature(payload)
+        headers={
+            "ApiKey":MEXC_API_KEY,
+            "Request-Time":str(timestamp),
+            "Signature":sign,
+            "Content-Type":"application/json"
+        }
+        r=requests.post(f"{MEXC_BASE_URL}/api/v1/private/order/submit",json=payload,headers=headers,timeout=15)
+        print(f"[MEXC ORDER] {r.text}")
+        send_trade_message(f"🚀 ISLEM ACILDI\n{symbol}\n{sinyal if 'sinyal' in globals() else side}")
+    except Exception as e:
+        print(f"[MEXC ORDER HATA] {e}")
+
+
 # ==========================================
 # WEBHOOK ENDPOINT
 # ==========================================
@@ -1468,6 +1542,12 @@ def webhook():
 
     print(f"[SINYAL] {symbol} {sinyal} @ {price} ({timeframe}) | TP1={tp1} TP2={tp2} TP3={tp3} SL={sl}")
     mesaj = format_mesaj(symbol, price, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl)
+
+    try:
+        mexc_place_order(symbol=symbol, side=sinyal, tp=tp1, sl=sl)
+    except Exception as e:
+        print(f"[MEXC WEBHOOK HATA] {e}")
+
 
     t = threading.Thread(
         target=send_telegram_and_schedule_tp,
