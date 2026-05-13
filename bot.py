@@ -12,15 +12,16 @@ except:
     TR_TZ = None
 
 load_dotenv()
-
 # ==========================================
 # MEXC FUTURES
 # ==========================================
-MEXC_API_KEY = os.getenv("MEXC_API_KEY")
+
+MEXC_API_KEY    = os.getenv("MEXC_API_KEY")
 MEXC_API_SECRET = os.getenv("MEXC_API_SECRET")
+
 MEXC_MARGIN_USDT = float(os.getenv("MEXC_MARGIN_USDT", "0.25"))
+
 MEXC_BASE_URL = "https://contract.mexc.com"
-TRADE_CHAT_ID = "-3990949543"
 
 app = Flask(__name__)
 
@@ -29,6 +30,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_KANAL_ID = os.getenv("TELEGRAM_KANAL_ID", "")  # Eski alarm kanalı
 TELEGRAM_LOG_ID  = os.getenv("TELEGRAM_LOG_ID", "")
 CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
+MEXC_NOTIFY_CHAT_ID = os.getenv("MEXC_NOTIFY_CHAT_ID", "-3990949543")
+AUTO_TRADE_ENABLED = os.getenv("AUTO_TRADE_ENABLED", "false").lower() == "true"
 KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
 KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
 
@@ -128,6 +131,85 @@ def sinyal_emoji(sinyal: str) -> str:
 
 def get_sym(symbol: str) -> str:
     return symbol.upper().replace(".P", "").replace("USDT.P", "USDT")
+# ==========================================
+
+    except Exception as e:
+        print(f"[MEXC TPSL HATA] {e}")
+
+
+def mexc_place_order(symbol, side, sl=None, tp=None):
+
+    if not AUTO_TRADE_ENABLED:
+        print("[MEXC] AUTO_TRADE_ENABLED = FALSE")
+        return
+
+    try:
+
+        symbol = mexc_format_symbol(symbol)
+
+        fiyat = get_mexc_price(symbol.replace("_", ""))
+
+        if not fiyat:
+            print("[MEXC] fiyat alinamadi")
+            return
+
+        leverage = get_max_leverage(symbol)
+
+        pozisyon_usdt = MEXC_MARGIN_USDT * leverage
+
+        qty = round(pozisyon_usdt / fiyat, 3)
+
+        timestamp = int(time.time() * 1000)
+
+        payload = {
+            "symbol": symbol,
+            "price": fiyat,
+            "vol": qty,
+            "side": mexc_side(side),
+            "type": 5,
+            "openType": 2,
+            "leverage": leverage,
+            "externalOid": str(timestamp),
+            "timestamp": timestamp
+        }
+
+        sign = mexc_signature(payload)
+
+        headers = {
+            "ApiKey": MEXC_API_KEY,
+            "Request-Time": str(timestamp),
+            "Signature": sign,
+            "Content-Type": "application/json"
+        }
+
+        print(f"[MEXC] ORDER GONDERILIYOR => {payload}")
+
+        r = requests.post(
+            f"{MEXC_BASE_URL}/api/v1/private/order/submit",
+            json=payload,
+            headers=headers,
+            timeout=15
+        )
+
+        print(f"[MEXC ORDER] {r.text}")
+
+        if r.status_code != 200:
+            return
+
+        data = r.json()
+
+        if not data.get("success"):
+            return
+
+        mexc_place_tpsl(
+            symbol=symbol,
+            position_side=side,
+            tp=tp,
+            sl=sl
+        )
+
+    except Exception as e:
+        print(f"[MEXC ORDER HATA] {e}")
 
 # ==========================================
 # VERİ DEPOSU
@@ -576,6 +658,23 @@ def tp_kontrol_gonder(symbol, sinyal, timeframe, tp1, tp2, tp3, tp4, tp5, sl,
 # SINYAL GÖNDER + TP PLANLA
 # ==========================================
 
+TRADE_CHAT_ID = MEXC_NOTIFY_CHAT_ID
+
+def send_trade_message(text):
+
+    try:
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+        payload = {
+            "chat_id": TRADE_CHAT_ID,
+            "text": text
+        }
+
+        requests.post(url, json=payload, timeout=15)
+
+    except Exception as e:
+        print(f"[TRADE TELEGRAM HATA] {e}")
 def send_telegram_and_schedule_tp(caption, symbol, timeframe, sinyal,
                                    tp1, tp2, tp3, tp4, tp5, sl,
                                    imageurl=None, price=None):
@@ -1222,69 +1321,6 @@ def parse_plain(raw: str):
     return symbol, price, timeframe, sinyal if sinyal else "SINYAL", tp1, tp2, tp3, tp4, tp5, sl
 
 
-
-
-def send_trade_message(text):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TRADE_CHAT_ID, "text": text}
-        r = requests.post(url, json=payload, timeout=15)
-        print(f"[TRADE TELEGRAM] {r.text}")
-    except Exception as e:
-        print(f"[TRADE TELEGRAM HATA] {e}")
-
-
-def mexc_signature(params: dict):
-    query = "&".join([f"{k}={params[k]}" for k in sorted(params)])
-    return hmac.new(MEXC_API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
-
-
-def get_max_leverage(symbol):
-    try:
-        r = requests.get(f"{MEXC_BASE_URL}/api/v1/contract/detail", timeout=10)
-        data = r.json()
-        for item in data.get("data", []):
-            if item.get("symbol")==symbol:
-                return int(item.get("maxLeverage",50))
-    except Exception as e:
-        print(f"[MEXC LEVERAGE HATA] {e}")
-    return 50
-
-
-def mexc_place_order(symbol, side, sl=None, tp=None):
-    try:
-        symbol=symbol.replace('.P','').replace('USDT','_USDT') if '_' not in symbol else symbol
-        fiyat=get_mexc_price(symbol.replace('_',''))
-        if not fiyat:
-            return
-        leverage=get_max_leverage(symbol)
-        qty=round((MEXC_MARGIN_USDT*leverage)/fiyat,3)
-        timestamp=int(time.time()*1000)
-        payload={
-            "symbol":symbol,
-            "price":fiyat,
-            "vol":qty,
-            "side":1 if 'LONG' in side.upper() or 'BUY' in side.upper() else 3,
-            "type":5,
-            "openType":2,
-            "leverage":leverage,
-            "externalOid":str(timestamp),
-            "timestamp":timestamp
-        }
-        sign=mexc_signature(payload)
-        headers={
-            "ApiKey":MEXC_API_KEY,
-            "Request-Time":str(timestamp),
-            "Signature":sign,
-            "Content-Type":"application/json"
-        }
-        r=requests.post(f"{MEXC_BASE_URL}/api/v1/private/order/submit",json=payload,headers=headers,timeout=15)
-        print(f"[MEXC ORDER] {r.text}")
-        send_trade_message(f"🚀 ISLEM ACILDI\n{symbol}\n{sinyal if 'sinyal' in globals() else side}")
-    except Exception as e:
-        print(f"[MEXC ORDER HATA] {e}")
-
-
 # ==========================================
 # WEBHOOK ENDPOINT
 # ==========================================
@@ -1542,21 +1578,58 @@ def webhook():
 
     print(f"[SINYAL] {symbol} {sinyal} @ {price} ({timeframe}) | TP1={tp1} TP2={tp2} TP3={tp3} SL={sl}")
     mesaj = format_mesaj(symbol, price, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl)
+# ==========================================
+# MEXC FUTURES ORDER
+# ==========================================
 
-    try:
-        mexc_place_order(symbol=symbol, side=sinyal, tp=tp1, sl=sl)
-    except Exception as e:
-        print(f"[MEXC WEBHOOK HATA] {e}")
+try:
 
+    tp_target = tp1
 
-    t = threading.Thread(
-        target=send_telegram_and_schedule_tp,
-        args=(mesaj, symbol, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl, imageurl, price))
-    t.daemon = True
-    t.start()
+    if tp_target is not None:
+        tp_target = float(str(tp_target).replace(",", "."))
 
-    return jsonify({"status": "ok"}), 200
+    sl_target = sl
 
+    if sl_target is not None:
+        sl_target = float(str(sl_target).replace(",", "."))
+
+    mexc_place_order(
+        symbol=symbol,
+        side=sinyal,
+        tp=tp_target,
+        sl=sl_target
+    )
+
+try:
+
+    send_trade_message(
+        f"""
+🚀 MEXC ISLEM ACILDI
+
+📊 {symbol}
+📌 Side: {sinyal}
+
+💰 Margin: {MEXC_MARGIN_USDT} USDT
+
+🎯 TP1: {tp1}
+🛑 SL: {sl}
+"""
+    )
+
+except Exception as e:
+    print(f"[TRADE MESAJ HATA] {e}")
+
+except Exception as e:
+    print(f"[MEXC WEBHOOK HATA] {e}")
+
+t = threading.Thread(
+    target=send_telegram_and_schedule_tp,
+    args=(mesaj, symbol, timeframe, sinyal, tp1, tp2, tp3, tp4, tp5, sl, imageurl, price))
+t.daemon = True
+t.start()
+
+return jsonify({"status": "ok"}), 200
 
 @app.route("/health")
 def health():
