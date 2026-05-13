@@ -26,11 +26,25 @@ MEXC_BASE_URL = "https://contract.mexc.com"
 app = Flask(__name__)
 
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_TOKEN = TELEGRAM_TOKEN
+
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_KANAL_ID = os.getenv("TELEGRAM_KANAL_ID", "")  # Eski alarm kanalı
 TELEGRAM_LOG_ID  = os.getenv("TELEGRAM_LOG_ID", "")
 CHARTIMG_KEY     = os.getenv("CHARTIMG_KEY", "")
 MEXC_NOTIFY_CHAT_ID = os.getenv("MEXC_NOTIFY_CHAT_ID", "-3990949543")
+
+def mexc_format_symbol(symbol):
+    """
+    BTCUSDT.P -> BTC_USDT
+    ETHUSDT.P -> ETH_USDT
+    """
+    try:
+        clean = symbol.replace(".P", "").replace("USDT", "_USDT")
+        return clean
+    except Exception:
+        return symbol
+
 AUTO_TRADE_ENABLED = os.getenv("AUTO_TRADE_ENABLED", "false").lower() == "true"
 KANAL_ADI        = os.getenv("KANAL_ADI", "BEN KÜL YUTMAM")
 KANAL_TAG        = os.getenv("KANAL_TAG", "@dayiscalper")
@@ -662,7 +676,7 @@ def send_trade_message(text):
 
     try:
 
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
         payload = {
             "chat_id": TRADE_CHAT_ID,
