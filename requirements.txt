@@ -5,3 +5,4 @@ pytz
 gunicorn
 Pillow
 matplotlib
+pymexc
