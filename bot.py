@@ -3,7 +3,7 @@ import os, time, json, re, threading, requests, base64, io, hmac, hashlib, trace
 # Degisiklikler (v172 -> v173):
 #   1. Proxy geri eklendi — SADECE private API istekleri icin (IPRoyal)
 #   2. Public istekler (mark price, ticker, contract detail) direkt gidiyor
-# Degisiklikler (v171 -> v172):
+# Degisiklikler (v171 -> v172): 
 #   1. MEXC blogu detayli loglama — her adim izleniyor
 #   2. mexc_place_order icinde tam traceback basiliyor
 #   3. MEXC webhook exception handler traceback ile guclendirildi
