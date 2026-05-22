@@ -400,11 +400,40 @@ def mexc_notify(symbol, sinyal, vol=0, leverage=0, margin=0,
         print(f"[MEXC BILDIRIM] Hata: {e}")
 
 
+def mexc_margin_ratio_kontrol():
+    """Hesap margin ratio'sunu kontrol et. %20 üzerindeyse True döner (işlem açma)."""
+    try:
+        r = mexc_private_get(f"{MEXC_BASE_URL}/api/v1/private/account/assets")
+        res = r.json()
+        if not res.get("success"):
+            return False  # Veri gelmezse bloklama
+        assets = res.get("data", [])
+        if isinstance(assets, list):
+            for asset in assets:
+                if asset.get("currency") == "USDT":
+                    equity = float(asset.get("equity", 0))
+                    position_margin = float(asset.get("positionMargin", 0))
+                    if equity > 0:
+                        ratio = position_margin / equity * 100
+                        print(f"[MEXC] Margin ratio: %{ratio:.1f} (pozisyon={position_margin:.4f} equity={equity:.4f})")
+                        if ratio > 20:
+                            print(f"[MEXC] Margin ratio %20 üzerinde, yeni işlem açılmıyor!")
+                            return True
+        return False
+    except Exception as e:
+        print(f"[MEXC] Margin ratio kontrol hatasi: {e}")
+        return False  # Hata durumunda bloklama
+
+
 def mexc_place_order(symbol, sinyal, tp1=None, sl=None):
     if not AUTO_TRADE_ENABLED:
         return None
     if not MEXC_API_KEY or not MEXC_API_SECRET:
         return {"success": False, "msg": "MEXC API anahtari tanimli degil"}
+
+    # Margin ratio kontrolü — %20 üzerindeyse yeni işlem açma
+    if mexc_margin_ratio_kontrol():
+        return {"success": False, "msg": "Margin ratio %20 uzerinde, islem atlandı"}
 
     sym = mexc_format_symbol(symbol)
     is_long = any(x in sinyal.upper() for x in ["BUY", "LONG"])
@@ -499,8 +528,12 @@ def mexc_update_tpsl(symbol, is_long, tp1, sl):
             body["stopLossPriceType"] = 3  # Index Price (Fair Price icin)
 
         print(f"[MEXC TPSL] stoporder body: {body}")
-        r2 = mexc_private_post(f"{MEXC_BASE_URL}/api/v1/private/stoporder/place", body)
-        print(f"[MEXC TPSL] stoporder yanit: {r2.text[:200]}")
+        r2 = mexc_private_post(f"{MEXC_BASE_URL}/api/v1/private/position/change_tpsl", body)
+        print(f"[MEXC TPSL] change_tpsl yanit: {r2.text[:200]}")
+        if not r2.json().get("success"):
+            # Fallback: stoporder/place
+            r2 = mexc_private_post(f"{MEXC_BASE_URL}/api/v1/private/stoporder/place", body)
+            print(f"[MEXC TPSL] stoporder yanit: {r2.text[:200]}")
         print(f"[MEXC TPSL] Son yanit: {r2.text}")
         return r2.json().get("success", False)
     except Exception as e:
@@ -4727,8 +4760,8 @@ def _trend_zamanlayici():
 # BAŞLAT
 # ==========================================
 
-BOT_VERSIYON = "v277"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v277 ==========")
+BOT_VERSIYON = "v279"
+print(f"[BASLANGIC] ========== BOT VERSIYON: v279 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
