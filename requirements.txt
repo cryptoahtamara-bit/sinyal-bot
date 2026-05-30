@@ -5,3 +5,5 @@ pytz
 gunicorn
 Pillow
 matplotlib
+websocket-client
+scipy
