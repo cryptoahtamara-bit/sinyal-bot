@@ -4,7 +4,7 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
-# bot_v435 — 3 Haziran 2026
+# bot_v435 — 3 Haziran 2026 
 # Degisiklikler (v434 -> v435):
 #   1. BUG FIX: BTC (eski olta) parse=FAIL ana neden bulundu
 #      parse_blok fonksiyonu giris/sl/tp1 hesaplıyor ama "return []" ile bitiyordu
