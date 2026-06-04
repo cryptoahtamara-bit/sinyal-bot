@@ -4,6 +4,16 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
+# bot_v445 — 4 Haziran 2026
+# Degisiklikler (v444 -> v445):
+#   1. BREAKOUT_ENVANTER listesi eklendi (TOPIC_OLTA'nin hemen altina)
+#      8 gerçek BTC olayı: 4 çöküş + 4 yükseliş
+#      Her olay: tarih, yön, hareket_pct, süre_gün, piyasa koşulları
+#   2. _breakout_benzerlik_hesapla() fonksiyonu eklendi
+#      Funding, OI yönü, CVD uyum, Likidasyon tarafı üzerinden 100 üzeri skor
+#   3. _analiz_ozet_telegram() en altına yeni bölüm eklendi
+#      /analiz komutunda otomatik çalışır, en benzer 3 olay listelenir
+#      Yükseliş/düşüş ağırlığına göre genel yorum eklenir
 # bot_v444 — 4 Haziran 2026
 # Degisiklikler (v443 -> v444):
 #   1. Fibonacci lookback değerleri güncellendi
@@ -315,6 +325,168 @@ TOPIC_RAPOR       = int(os.getenv("TOPIC_RAPOR",   "6"))
 TOPIC_HABER       = int(os.getenv("TOPIC_HABER",   "287")) # 📰 Haberler & Analiz
 TOPIC_BALINA      = int(os.getenv("TOPIC_BALINA",  "393")) # 🐋 Balina Cüzdan Takibi
 TOPIC_OLTA        = int(os.getenv("TOPIC_OLTA",    "0"))   # 🎣 Parite Olta Sorgulama
+
+# ==========================================
+# GEÇMİŞ BREAKOUT ENVANTERİ
+# ==========================================
+# Her olay: ad, tarih, yon (yukari/asagi), hareket_pct, sure_gun,
+#           kosullar: funding_min, funding_max, oi_yon (+/-), cvd_uyum (uyumlu/uyumsuz_yukari/uyumsuz_asagi), lik_taraf (long/short/dengeli)
+BREAKOUT_ENVANTER = [
+    {
+        "ad": "FTX Çöküşü",
+        "tarih": "Kas 2022",
+        "yon": "asagi",
+        "hareket_pct": -28,
+        "sure_gun": 3,
+        "kosullar": {
+            "funding_min": 0.03,
+            "funding_max": 0.06,
+            "oi_yon": "+",          # OI artıyordu, shortlar açılıyordu
+            "cvd_uyum": "uyumsuz_yukari",  # Fiyat düşerken CVD pozitifleşmişti (panik alım)
+            "lik_taraf": "long",    # Long tasfiyesi ağır bastı
+        }
+    },
+    {
+        "ad": "LUNA Çöküşü",
+        "tarih": "May 2022",
+        "yon": "asagi",
+        "hareket_pct": -35,
+        "sure_gun": 5,
+        "kosullar": {
+            "funding_min": 0.02,
+            "funding_max": 0.05,
+            "oi_yon": "+",          # OI şişmişti
+            "cvd_uyum": "uyumsuz_yukari",
+            "lik_taraf": "long",
+        }
+    },
+    {
+        "ad": "Covid Paniği",
+        "tarih": "Mar 2020",
+        "yon": "asagi",
+        "hareket_pct": -50,
+        "sure_gun": 4,
+        "kosullar": {
+            "funding_min": -0.02,
+            "funding_max": 0.01,
+            "oi_yon": "-",          # OI eridi, tasfiye
+            "cvd_uyum": "uyumsuz_asagi",  # Fiyat düşerken CVD daha da negatif
+            "lik_taraf": "long",
+        }
+    },
+    {
+        "ad": "China Mining Yasağı",
+        "tarih": "May 2021",
+        "yon": "asagi",
+        "hareket_pct": -30,
+        "sure_gun": 7,
+        "kosullar": {
+            "funding_min": 0.02,
+            "funding_max": 0.08,
+            "oi_yon": "+",
+            "cvd_uyum": "uyumsuz_yukari",
+            "lik_taraf": "long",
+        }
+    },
+    {
+        "ad": "ETF Onayı Öncesi Rallisi",
+        "tarih": "Eki 2023",
+        "yon": "yukari",
+        "hareket_pct": 40,
+        "sure_gun": 10,
+        "kosullar": {
+            "funding_min": -0.02,
+            "funding_max": 0.01,
+            "oi_yon": "+",          # Short squeeze + yeni alımlar
+            "cvd_uyum": "uyumlu",   # CVD ve fiyat birlikte yükseldi
+            "lik_taraf": "short",   # Short tasfiyesi hâkimdi
+        }
+    },
+    {
+        "ad": "Kurumsal Alım Rallisi",
+        "tarih": "Şub 2021",
+        "yon": "yukari",
+        "hareket_pct": 60,
+        "sure_gun": 14,
+        "kosullar": {
+            "funding_min": 0.01,
+            "funding_max": 0.04,
+            "oi_yon": "+",
+            "cvd_uyum": "uyumlu",
+            "lik_taraf": "short",
+        }
+    },
+    {
+        "ad": "Short Squeeze Rallisi",
+        "tarih": "Oca 2023",
+        "yon": "yukari",
+        "hareket_pct": 25,
+        "sure_gun": 5,
+        "kosullar": {
+            "funding_min": -0.03,
+            "funding_max": -0.01,
+            "oi_yon": "-",          # OI eridi = shortlar kapandı
+            "cvd_uyum": "uyumlu",
+            "lik_taraf": "short",
+        }
+    },
+    {
+        "ad": "Halving Öncesi Rallisi",
+        "tarih": "Nis 2024",
+        "yon": "yukari",
+        "hareket_pct": 35,
+        "sure_gun": 12,
+        "kosullar": {
+            "funding_min": 0.01,
+            "funding_max": 0.05,
+            "oi_yon": "+",
+            "cvd_uyum": "uyumlu",
+            "lik_taraf": "dengeli",
+        }
+    },
+]
+
+def _breakout_benzerlik_hesapla(btc_fund, oi_delta_pct, cvd_uyum_str, lik_taraf_str):
+    """
+    Mevcut piyasa koşullarını BREAKOUT_ENVANTER ile karşılaştırır.
+    En yüksek benzerlik puanlı 3 olayı döner.
+    Her kriter 25 puan. Toplam 100 üzerinden skor.
+    """
+    sonuclar = []
+    for olay in BREAKOUT_ENVANTER:
+        k = olay["kosullar"]
+        puan = 0
+
+        # 1) Funding aralığı uyumu (25 puan)
+        if k["funding_min"] <= btc_fund <= k["funding_max"]:
+            puan += 25
+        else:
+            # Yakınlık bonusu — aralığa uzaklık ne kadar az ise o kadar puan
+            dist = min(abs(btc_fund - k["funding_min"]), abs(btc_fund - k["funding_max"]))
+            puan += max(0, 25 - int(dist * 500))  # 0.05 fark = 0 puan
+
+        # 2) OI yönü uyumu (25 puan)
+        mevcut_oi_yon = "+" if oi_delta_pct >= 0 else "-"
+        if mevcut_oi_yon == k["oi_yon"]:
+            puan += 25
+
+        # 3) CVD uyum uyumu (25 puan)
+        if cvd_uyum_str == k["cvd_uyum"]:
+            puan += 25
+        elif cvd_uyum_str == "uyumlu" and k["cvd_uyum"] == "uyumlu":
+            puan += 25
+
+        # 4) Likidasyon tarafı uyumu (25 puan)
+        if lik_taraf_str == k["lik_taraf"]:
+            puan += 25
+        elif k["lik_taraf"] == "dengeli":
+            puan += 12  # Kısmi uyum
+
+        sonuclar.append((puan, olay))
+
+    # Puana göre sırala, en yüksek 3'ü döndür
+    sonuclar.sort(key=lambda x: -x[0])
+    return sonuclar[:3]
 
 # ==========================================
 # FİLİGRAN
@@ -9488,6 +9660,87 @@ def _analiz_ozet_telegram(coin_verileri, veriler, zaman_str):
     if notlar:
         satirlar.append(f"  <i>Nedenler: {' · '.join(notlar)}</i>")
 
+    # ── 7) GEÇMİŞ BREAKOUT BENZERLİĞİ ──
+    satirlar.append("")
+    satirlar.append("⚡ <b>Geçmiş Breakout Benzerliği</b>")
+    satirlar.append("<i>Mevcut koşullar (Funding, OI, CVD, Likidasyon) geçmiş büyük BTC hareketleriyle karşılaştırıldı.</i>")
+
+    try:
+        # Mevcut koşulları belirle
+        # CVD uyum: birden fazla coin varsa hâkim durumu al
+        if len(uyumsuz_yukari) >= len(uyumsuz_asagi) and len(uyumsuz_yukari) > 0:
+            mevcut_cvd_uyum = "uyumsuz_yukari"
+        elif len(uyumsuz_asagi) > 0:
+            mevcut_cvd_uyum = "uyumsuz_asagi"
+        else:
+            mevcut_cvd_uyum = "uyumlu"
+
+        # Likidasyon tarafı
+        if toplam_lik < 0.3:
+            mevcut_lik_taraf = "dengeli"
+        elif long_lik > short_lik * 1.5:
+            mevcut_lik_taraf = "long"
+        elif short_lik > long_lik * 1.5:
+            mevcut_lik_taraf = "short"
+        else:
+            mevcut_lik_taraf = "dengeli"
+
+        # OI delta (BTC)
+        btc_oi_d = btc_veri.get("oi_delta")
+        mevcut_oi_delta = btc_oi_d["delta_pct"] if btc_oi_d else 0.0
+
+        # Benzerlik hesapla
+        benzer_olaylar = _breakout_benzerlik_hesapla(
+            btc_fund, mevcut_oi_delta, mevcut_cvd_uyum, mevcut_lik_taraf
+        )
+
+        # Mevcut koşullar özeti
+        oi_str = f"{mevcut_oi_delta:+.1f}%" if btc_oi_d else "—"
+        satirlar.append(
+            f"📊 <b>Mevcut:</b> Funding <b>{btc_fund:+.4f}%</b>  ·  "
+            f"OI <b>{oi_str}</b>  ·  "
+            f"CVD <b>{mevcut_cvd_uyum.replace('_', ' ')}</b>  ·  "
+            f"Lik. <b>{mevcut_lik_taraf}</b>"
+        )
+        satirlar.append("")
+
+        # Benzer olayları listele
+        asagi_sayisi = 0
+        yukari_sayisi = 0
+        for puan, olay in benzer_olaylar:
+            yuzde = puan  # zaten 100 üzerinden
+            if olay["yon"] == "asagi":
+                ikon = "📉"
+                asagi_sayisi += 1
+            else:
+                ikon = "📈"
+                yukari_sayisi += 1
+            satirlar.append(
+                f"{ikon} <b>%{yuzde}</b> benzerlik → {olay['ad']} ({olay['tarih']}) "
+                f"— o zaman <b>{olay['hareket_pct']:+d}%</b> oldu ({olay['sure_gun']}g)"
+            )
+
+        # Genel yorum
+        satirlar.append("")
+        if asagi_sayisi >= 2 and yukari_sayisi == 0:
+            satirlar.append("⚠️ <b>Tüm benzer geçmiş olaylar düşüşle sonuçlandı — stop'ları sıkıştır.</b>")
+        elif yukari_sayisi >= 2 and asagi_sayisi == 0:
+            satirlar.append("🚀 <b>Tüm benzer geçmiş olaylar yükselişle sonuçlandı — trend takibinde kal.</b>")
+        elif asagi_sayisi > yukari_sayisi:
+            satirlar.append("⚠️ <b>Benzerlik ağırlıklı düşüş yönünde — ihtiyatlı pozisyon al.</b>")
+        elif yukari_sayisi > asagi_sayisi:
+            satirlar.append("📈 <b>Benzerlik ağırlıklı yükseliş yönünde — trend pozisyonlarını koru.</b>")
+        else:
+            satirlar.append("↔️ <b>Benzerlik karışık yönlü — net sinyal bekle.</b>")
+
+        satirlar.append(
+            "<i>Not: Benzerlik skoru Funding, OI yönü, CVD uyumu ve likidasyon tarafına göre hesaplanır. "
+            "Kesin tahmin değildir.</i>"
+        )
+    except Exception as e:
+        print(f"[ANALIZ] Breakout benzerlik hatasi: {e}")
+        satirlar.append("— Breakout benzerlik hesaplanamadı.")
+
     satirlar.append(f"\n<i>Kaynak: Binance Futures + Spot  ·  {zaman_str}</i>")
     return "\n".join(satirlar)
 
@@ -9564,8 +9817,8 @@ def _analiz_zamanlayici():
 # BAŞLAT
 # ==========================================
 
-BOT_VERSIYON = "v444"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v444 ==========")
+BOT_VERSIYON = "v445"
+print(f"[BASLANGIC] ========== BOT VERSIYON: v445 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
