@@ -4,8 +4,8 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
-# bot_v470 — 8 Haziran 2026
-# Degisiklikler (v469 -> v470):
+# bot_v472 — 8 Haziran 2026
+# Degisiklikler (v471 -> v472):
 #   1. Kayıp sinyal verisi offset olarak Tüm Zamanlar'a eklendi
 #      05 Haziran 2026 00:30 itibarıyla: 4982 sinyal, 2185 TP, 34 SL
 #      2338 Long, 2644 Short — Bu değerler gun_filtre=None istatistiğine eklenir
@@ -800,7 +800,8 @@ MEXC_API_SECRET    = os.getenv("MEXC_API_SECRET", "")
 # Sabit hedef: -1003990949543 — env ile override edilebilir
 MEXC_NOTIFY_CHAT_ID  = os.getenv("MEXC_NOTIFY_CHAT_ID", "-1003990949543")
 MEXC_MAX_MARGIN_PCT  = float(os.getenv("MEXC_MAX_MARGIN_PCT", "20"))  # Maksimum margin ratio %
-MEXC_MARGIN_USDT   = float(os.getenv("MEXC_MARGIN_USDT", "0.25"))
+MEXC_MARGIN_USDT        = float(os.getenv("MEXC_MARGIN_USDT", "0.25"))
+HEDGE_MARGIN_MULTIPLIER = 2.0  # Hedge marjin çarpanı — hedge_margin_max = MEXC_MARGIN_USDT × bu değer
 MEXC_LEVERAGE      = int(os.getenv("MEXC_LEVERAGE", "0"))   # 0 = sınırsız (max kullan), >0 = üst limit
 MEXC_BASE_URL      = "https://futures.mexc.com"
 MEXC_BASE_URL_ALT  = "https://contract.mexc.com"
@@ -3902,7 +3903,7 @@ def webhook():
                                             print(f"[HEDGE] Marjin alınamadı — global ayar kullanılıyor: {MEXC_MARGIN_USDT} USDT")
                                     hedge_margin_ham = round(onceki_margin * 2, 4)
                                     # Üst sınır: global MEXC_MARGIN_USDT'nin 2 katını aşamasın
-                                    hedge_margin_max = round(MEXC_MARGIN_USDT * 2, 4)
+                                    hedge_margin_max = round(MEXC_MARGIN_USDT * HEDGE_MARGIN_MULTIPLIER, 4)
                                     hedge_margin = min(hedge_margin_ham, hedge_margin_max)
                                     if hedge_margin < hedge_margin_ham:
                                         print(f"[HEDGE] Marjin üst sınıra indirildi: {hedge_margin_ham} → {hedge_margin} USDT (max={hedge_margin_max})")
@@ -3911,7 +3912,7 @@ def webhook():
                                     print(f"[HEDGE] Marjin hesap hatası: {_me}, fallback={hedge_margin}")
 
                                 manuel_notu = "\n⚠️ Manuel pozisyon tespit edildi — API'den marjin alındı" if manuel_acilis else ""
-                                print(f"[HEDGE] Önceki marjin: {onceki_margin} → Hedge marjin: {hedge_margin} (max={round(MEXC_MARGIN_USDT*2,4)}) {'(manuel)' if manuel_acilis else '(bot)'}") 
+                                print(f"[HEDGE] Önceki marjin: {onceki_margin} → Hedge marjin: {hedge_margin} (max={round(MEXC_MARGIN_USDT*HEDGE_MARGIN_MULTIPLIER,4)}) {'(manuel)' if manuel_acilis else '(bot)'}") 
                                 sonuc = mexc_place_order(symbol, sinyal, tp1_hedge, sl,
                                                          hedge=True, margin_override=hedge_margin)
                                 if sonuc and sonuc["success"]:
@@ -3993,8 +3994,10 @@ def webhook():
 
                             # +0.2 USDT marjin ile yeni emir aç
                             guc_margin = round(MEXC_MARGIN_USDT + 0.2, 4)
-                            print(f"[MEXC] SENARYO GUC — {_poz_key} güçlendiriliyor: +0.2 USDT → {guc_margin} USDT, TP={tp_kullan}, SL={sl_kullan}")
+                            _guc_hedge_muaf = bool(_wl_hedge)  # HEDGE açıksa margin ratio muaf
+                            print(f"[MEXC] SENARYO GUC — {_poz_key} güçlendiriliyor: +0.2 USDT → {guc_margin} USDT, TP={tp_kullan}, SL={sl_kullan} (hedge_muaf={_guc_hedge_muaf})")
                             sonuc_guc = mexc_place_order(symbol, sinyal, tp_kullan, sl_kullan,
+                                                         hedge=_guc_hedge_muaf,
                                                          margin_override=guc_margin)
                             if sonuc_guc and sonuc_guc["success"]:
                                 with pozisyon_kilit:
@@ -10406,7 +10409,7 @@ def _analiz_zamanlayici():
 # ==========================================
 
 BOT_VERSIYON = "v447"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v470 ==========")
+print(f"[BASLANGIC] ========== BOT VERSIYON: v472 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
