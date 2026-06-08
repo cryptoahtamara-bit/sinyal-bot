@@ -4,8 +4,8 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
-# bot_v472 — 8 Haziran 2026
-# Degisiklikler (v471 -> v472):
+# bot_v474 — 8 Haziran 2026
+# Degisiklikler (v473 -> v474):
 #   1. Kayıp sinyal verisi offset olarak Tüm Zamanlar'a eklendi
 #      05 Haziran 2026 00:30 itibarıyla: 4982 sinyal, 2185 TP, 34 SL
 #      2338 Long, 2644 Short — Bu değerler gun_filtre=None istatistiğine eklenir
@@ -3766,8 +3766,6 @@ def webhook():
                 else:
                     # Mevcut pozisyonu bul — önce API, sonra dict
                     mevcut = pozisyon_al(sym_key, is_long)
-                    if not mevcut:
-                        mevcut = pozisyon_al(sym_key, not is_long)
                     # Hedge pozisyonu da kontrol et — aynı yön hedge varsa revize edilebilir
                     # API'den doğrula: dict'te kayıt olsa bile gerçek pozisyon yoksa kullanma
                     hedge_mevcut = None
@@ -3851,8 +3849,8 @@ def webhook():
                             tp_kullan_2a = tp_sec_2a if tp_sec_2a else tp1_mevcut_h_f
                             sl_kullan_2a = sl_sec_2a
 
-                            guc_margin_2a = round(MEXC_MARGIN_USDT + 0.2, 4)
-                            print(f"[MEXC] SENARYO 2a GUC — HEDGE güçlendiriliyor: +0.2 USDT → {guc_margin_2a} USDT, TP={tp_kullan_2a}, SL={sl_kullan_2a}")
+                            guc_margin_2a = MEXC_MARGIN_USDT
+                            print(f"[MEXC] SENARYO 2a GUC — HEDGE güçlendiriliyor: +{MEXC_MARGIN_USDT} USDT, TP={tp_kullan_2a}, SL={sl_kullan_2a}")
                             sonuc_2a = mexc_place_order(symbol, sinyal, tp_kullan_2a, sl_kullan_2a,
                                                         hedge=True, margin_override=guc_margin_2a)
                             if sonuc_2a and sonuc_2a["success"]:
@@ -3866,8 +3864,9 @@ def webhook():
                                 mexc_notify(symbol, sinyal,
                                     bilgi_msg=(
                                         f"💪 Pozisyon Güçlendirildi (Hedge)\n"
-                                        f"Eklenen Marjin: +0.2 USDT (toplam ~{guc_margin_2a} USDT)\n"
-                                        f"TP: {tp_kullan_2a} | SL: {sl_kullan_2a}"))
+                                        f"Marjin: +{MEXC_MARGIN_USDT} USDT eklendi\n"
+                                        f"TP: {tp1_mevcut_h_f} → {tp_kullan_2a}\n"
+                                        f"SL: {sl_mevcut_h_f} → {sl_kullan_2a}"))
                             elif sonuc_2a:
                                 mexc_notify(symbol, sinyal, hata_msg=sonuc_2a.get("msg", "Hata"))
 
@@ -3992,30 +3991,52 @@ def webhook():
                             tp_kullan  = tp_sec if tp_sec else tp1_mevcut_f
                             sl_kullan  = sl_sec
 
-                            # +0.2 USDT marjin ile yeni emir aç
-                            guc_margin = round(MEXC_MARGIN_USDT + 0.2, 4)
-                            _guc_hedge_muaf = bool(_wl_hedge)  # HEDGE açıksa margin ratio muaf
-                            print(f"[MEXC] SENARYO GUC — {_poz_key} güçlendiriliyor: +0.2 USDT → {guc_margin} USDT, TP={tp_kullan}, SL={sl_kullan} (hedge_muaf={_guc_hedge_muaf})")
-                            sonuc_guc = mexc_place_order(symbol, sinyal, tp_kullan, sl_kullan,
-                                                         hedge=_guc_hedge_muaf,
-                                                         margin_override=guc_margin)
-                            if sonuc_guc and sonuc_guc["success"]:
-                                with pozisyon_kilit:
-                                    if _poz_key in aktif_pozisyonlar:
-                                        aktif_pozisyonlar[_poz_key].update({
-                                            "timeframe": timeframe, "sinyal": sinyal,
-                                            "tp1": tp_kullan, "sl": sl_kullan
-                                        })
-                                    else:
-                                        print(f"[MEXC] {_poz_key} güncelleme atlandı — pozisyon temizlenmiş")
-                                pozisyon_kaydet()
-                                mexc_notify(symbol, sinyal,
-                                    bilgi_msg=(
-                                        f"💪 Pozisyon Güçlendirildi{hedge_notu}\n"
-                                        f"Eklenen Marjin: +0.2 USDT (toplam ~{guc_margin} USDT)\n"
-                                        f"TP: {tp_kullan} | SL: {sl_kullan}"))
-                            elif sonuc_guc:
-                                mexc_notify(symbol, sinyal, hata_msg=sonuc_guc.get("msg", "Hata"))
+                            # HEDGE VAR: +MEXC_MARGIN_USDT ekle, yeni emir aç
+                            # HEDGE YOK: sadece TP/SL güncelle, marjin ekleme
+                            if _wl_hedge:
+                                guc_margin = round(MEXC_MARGIN_USDT + MEXC_MARGIN_USDT, 4)
+                                print(f"[MEXC] SENARYO GUC (hedge var) — +{MEXC_MARGIN_USDT} USDT → {guc_margin} USDT, TP={tp_kullan}, SL={sl_kullan}")
+                                sonuc_guc = mexc_place_order(symbol, sinyal, tp_kullan, sl_kullan,
+                                                             hedge=True, margin_override=MEXC_MARGIN_USDT)
+                                if sonuc_guc and sonuc_guc["success"]:
+                                    with pozisyon_kilit:
+                                        if _poz_key in aktif_pozisyonlar:
+                                            aktif_pozisyonlar[_poz_key].update({
+                                                "timeframe": timeframe, "sinyal": sinyal,
+                                                "tp1": tp_kullan, "sl": sl_kullan
+                                            })
+                                        else:
+                                            print(f"[MEXC] {_poz_key} güncelleme atlandı — pozisyon temizlenmiş")
+                                    pozisyon_kaydet()
+                                    mexc_notify(symbol, sinyal,
+                                        bilgi_msg=(
+                                            f"💪 Pozisyon Güçlendirildi{hedge_notu}\n"
+                                            f"Marjin: {tp1_mevcut_f and round(float(mevcut.get('mexc_oim') or MEXC_MARGIN_USDT),4)} → +{MEXC_MARGIN_USDT} USDT\n"
+                                            f"TP: {tp1_mevcut_f} → {tp_kullan}\n"
+                                            f"SL: {sl_mevcut_f} → {sl_kullan}"))
+                                elif sonuc_guc:
+                                    mexc_notify(symbol, sinyal, hata_msg=sonuc_guc.get("msg", "Hata"))
+                            else:
+                                # Hedge yok — sadece TP/SL güncelle
+                                print(f"[MEXC] SENARYO GUC (hedge yok) — sadece TP/SL güncelleniyor: TP={tp_kullan}, SL={sl_kullan}")
+                                tpsl_ok = mexc_update_tpsl(symbol, is_long, tp_kullan, sl_kullan)
+                                if tpsl_ok:
+                                    with pozisyon_kilit:
+                                        if _poz_key in aktif_pozisyonlar:
+                                            aktif_pozisyonlar[_poz_key].update({
+                                                "timeframe": timeframe, "sinyal": sinyal,
+                                                "tp1": tp_kullan, "sl": sl_kullan
+                                            })
+                                    pozisyon_kaydet()
+                                    mexc_notify(symbol, sinyal,
+                                        bilgi_msg=(
+                                            f"💪 Pozisyon Güçlendirildi{hedge_notu}\n"
+                                            f"TP: {tp1_mevcut_f} → {tp_kullan}\n"
+                                            f"SL: {sl_mevcut_f} → {sl_kullan}"))
+                                else:
+                                    mexc_notify(symbol, sinyal,
+                                        bilgi_msg=f"🛡️ TP/SL güncellenmedi — API hatası")
+                    else:
                         # Normal islem — SENARYO E: Yeni pozisyon
                         # Margin ratio son kontrolü — hedge işlemler muaf, sadece normal işlemler için
                         # API gecikmesi nedeniyle place_order içindeki kontrol geçebiliyor
@@ -10409,7 +10430,7 @@ def _analiz_zamanlayici():
 # ==========================================
 
 BOT_VERSIYON = "v447"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v472 ==========")
+print(f"[BASLANGIC] ========== BOT VERSIYON: v474 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
