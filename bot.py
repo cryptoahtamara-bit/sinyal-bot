@@ -4,6 +4,15 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
+# bot_v483 — 9 Haziran 2026
+# Degisiklikler (v482 -> v483):
+#   1. BUG FIX: Likidasyon bölgesi hesaplama — grid/kaldıraç yöntemi kaldırıldı
+#      1h kline hacim bazlı yöntem eklendi (heatmap ile aynı kaynak/mantık)
+#      Artık /liq yorumu ile ısı haritası tutarlı bölgeler gösteriyor
+#   2. IYILESTIRME: Market Yönü "Güçlü alım momentumu" ifadesi nüanslı hale getirildi
+#      puan>=4 olsa bile skor<65 veya breadth<7 ise farklı mesaj gösterilir
+#   3. IYILESTIRME: Breakout Benzerliği — çelişkili liste kaldırıldı
+#      Artık sadece en yüksek benzerlikli tek olay gösteriliyor, genel yön yorumu eklendi
 # bot_v482 — 9 Haziran 2026
 # Degisiklikler (v481 -> v482):
 #   1. BUG FIX: RSI asiri alim esigi >= 70 → > 70 (tam 70 asiri alim sayilmiyordu)
@@ -5352,60 +5361,62 @@ def _liq_veri_cek(symbol):
                 "toplam_hacim": toplam_hacim,
             }
 
-        # 8) Kaldıraç bazlı likidasyon bölgesi — grid yöntemi (heatmap ile aynı mantık)
+        # 8) Likidasyon bölgesi — 1h kline hacim bazlı (heatmap ile aynı kaynak/mantık)
+        # _liq_gorsel / _liq_heatmap ile tutarlı: aşağı mumlar → long baskı, yukarı mumlar → short baskı
         liq_long_baskisi  = None
         liq_short_baskisi = None
         try:
-            r8 = requests.get("https://fapi.binance.com/fapi/v1/klines",
-                              params={"symbol": sym, "interval": "15m", "limit": 50},
-                              timeout=6, proxies=BINANCE_PROXY)
-            klines_15m = r8.json() if r8.status_code == 200 else []
-            if len(klines_15m) >= 10 and fiyat > 0:
-                # Fiyat etrafı ±6% pencere — kaldıraç seviyeleri bu bantın içinde
-                p_min = fiyat * 0.94
-                p_max = fiyat * 1.06
-                n_bin = 100  # her bin ~%0.12 genişliğinde
-                long_grid  = [0.0] * n_bin
-                short_grid = [0.0] * n_bin
-                # Sadece fiyata yakın kaldıraçlar: 25x/50x/100x
-                kaldıraclar = [(25, 0.45), (50, 0.40), (100, 0.15)]  # 25x agirlik arttirildi, 100x azaltildi
-                for k in klines_15m:
-                    k_open  = float(k[1])
-                    k_close = float(k[4])
-                    k_usd   = float(k[5]) * k_close
-                    yukari  = k_close > k_open
-                    for lev, agirlik in kaldıraclar:
-                        long_lik  = k_open * (1 - 1 / lev)
-                        short_lik = k_open * (1 + 1 / lev)
-                        long_w    = k_usd * agirlik * (1.3 if not yukari else 0.7)
-                        short_w   = k_usd * agirlik * (1.3 if yukari else 0.7)
-                        if p_min < long_lik < fiyat:
-                            idx = int((long_lik - p_min) / (p_max - p_min) * n_bin)
-                            idx = max(0, min(n_bin - 1, idx))
-                            long_grid[idx] += long_w
-                        if fiyat < short_lik < p_max:
-                            idx = int((short_lik - p_min) / (p_max - p_min) * n_bin)
-                            idx = max(0, min(n_bin - 1, idx))
-                            short_grid[idx] += short_w
-                # En yogun 3 ardisik bin — tıpkı heatmap mantığı
-                def grid_en_yogun(grid, p_min, p_max, n_bin):
-                    en_iyi_idx   = 0
-                    en_iyi_toplam = 0.0
-                    for i in range(len(grid) - 2):
-                        t = grid[i] + grid[i+1] + grid[i+2]
-                        if t > en_iyi_toplam:
-                            en_iyi_toplam = t
-                            en_iyi_idx = i
-                    if en_iyi_toplam == 0:
+            if len(klines) >= 10 and fiyat > 0:
+                aralik = high_24h - low_24h
+                if aralik <= 0:
+                    aralik = fiyat * 0.02
+                n_bant = 20
+                adim   = aralik / n_bant
+                bantlar = [low_24h + i * adim for i in range(n_bant + 1)]
+                merkez  = [(bantlar[i] + bantlar[i+1]) / 2 for i in range(n_bant)]
+
+                long_yog  = [0.0] * n_bant   # aşağı mumlar → long likidasyon bölgesi
+                short_yog = [0.0] * n_bant   # yukarı mumlar → short likidasyon bölgesi
+
+                for k in klines:
+                    try:
+                        k_ac  = float(k[1])
+                        k_kap = float(k[4])
+                        k_yuk = float(k[2])
+                        k_dus = float(k[3])
+                        k_vol = float(k[5])
+                        yukari = k_kap > k_ac
+                        for i, m in enumerate(merkez):
+                            if k_dus <= m <= k_yuk:
+                                agirlik = max(0, 1 - abs(m - (k_ac + k_kap) / 2) / (aralik + 1e-9))
+                                if yukari:
+                                    short_yog[i] += k_vol * agirlik
+                                else:
+                                    long_yog[i]  += k_vol * agirlik
+                    except Exception:
+                        continue
+
+                # En yogun bant bölgesini bul — fiyat altı = long baskı, fiyat üstü = short baskı
+                def _en_yogun_bolge(yog, merkez, adim, fiyat_ref, taraf):
+                    """taraf='long' → fiyat altındaki bantlar, taraf='short' → fiyat üstündeki bantlar"""
+                    en_iyi_w = 0.0
+                    en_iyi_m = None
+                    for i, m in enumerate(merkez):
+                        if taraf == "long" and m >= fiyat_ref:
+                            continue
+                        if taraf == "short" and m <= fiyat_ref:
+                            continue
+                        if yog[i] > en_iyi_w:
+                            en_iyi_w = yog[i]
+                            en_iyi_m = m
+                    if en_iyi_m is None or en_iyi_w == 0:
                         return None
-                    bin_w  = (p_max - p_min) / n_bin
-                    alt    = p_min + en_iyi_idx * bin_w
-                    ust    = p_min + (en_iyi_idx + 3) * bin_w
-                    return (round(alt, 2), round(ust, 2))
-                liq_long_baskisi  = grid_en_yogun(long_grid,  p_min, p_max, n_bin)
-                liq_short_baskisi = grid_en_yogun(short_grid, p_min, p_max, n_bin)
+                    return (round(en_iyi_m - adim / 2, 2), round(en_iyi_m + adim / 2, 2))
+
+                liq_long_baskisi  = _en_yogun_bolge(long_yog,  merkez, adim, fiyat, "long")
+                liq_short_baskisi = _en_yogun_bolge(short_yog, merkez, adim, fiyat, "short")
         except Exception as _e:
-            print(f"[LIQ] Kaldıraç bolge hesaplama hata: {_e}")
+            print(f"[LIQ] Likidasyon bolge hesaplama hata: {_e}")
 
         return {
             "symbol": sym,
@@ -10495,7 +10506,10 @@ def _analiz_ozet_telegram(coin_verileri, veriler, zaman_str):
 
     if puan >= 4:
         yon_ikon, yon_metin = "📈", "YUKARI"
-        yon_acikla = "Güçlü alım momentumu. Çoğunluk göstergeler yükselişi destekliyor."
+        if ort_skor >= 65 and breadth >= 7:
+            yon_acikla = "Güçlü alım momentumu. Çoğunluk göstergeler yükselişi destekliyor."
+        else:
+            yon_acikla = "Yükseliş sinyali var ancak teknik göstergeler henüz tam teyit vermiyor. Seçici ol."
     elif puan >= 2:
         yon_ikon, yon_metin = "🟡", "HAFIF YUKARI"
         yon_acikla = "Yükseliş eğilimli ama henüz güçlü teyit yok. Breakout beklenmeli."
@@ -10570,47 +10584,33 @@ def _analiz_ozet_telegram(coin_verileri, veriler, zaman_str):
         )
         satirlar.append("")
 
-        # Benzer olayları listele
-        asagi_sayisi = 0
-        yukari_sayisi = 0
-        kritik_uyari = False
-
-        for puan, eslesme, olay in benzer_olaylar:
-            yuzde = puan
-            if olay["yon"] == "asagi":
-                ikon = "📉"
-                asagi_sayisi += 1
-            else:
-                ikon = "📈"
-                yukari_sayisi += 1
-
-            # 5+ kriter eşleşmesi = kritik
-            if eslesme >= 5:
-                kritik_uyari = True
+        # Sadece en yüksek benzerlikli olayı göster
+        if benzer_olaylar:
+            en_iyi_puan, en_iyi_eslesme, en_iyi_olay = benzer_olaylar[0]
+            ikon = "📉" if en_iyi_olay["yon"] == "asagi" else "📈"
+            if en_iyi_eslesme >= 5:
                 ikon = "🚨" + ikon
-
+                satirlar.append("🚨 <b>KRİTİK: 5+ kriter eşleşmesi tespit edildi — yakın zamanda sert hareket olabilir!</b>")
             satirlar.append(
-                f"{ikon} <b>%{yuzde}</b> benzerlik → {olay['ad']} ({olay['tarih']}) "
-                f"— o zaman <b>{olay['hareket_pct']:+d}%</b> oldu ({olay['sure_gun']}g)"
+                f"{ikon} <b>En yakın benzerlik: %{en_iyi_puan}</b> → {en_iyi_olay['ad']} ({en_iyi_olay['tarih']}) "
+                f"— o zaman <b>{en_iyi_olay['hareket_pct']:+d}%</b> oldu ({en_iyi_olay['sure_gun']}g)"
             )
-
-        # Kritik uyarı
-        if kritik_uyari:
+            # Genel yön yorumu tüm listeden
+            asagi_sayisi = sum(1 for _, _, o in benzer_olaylar if o["yon"] == "asagi")
+            yukari_sayisi = sum(1 for _, _, o in benzer_olaylar if o["yon"] == "yukari")
             satirlar.append("")
-            satirlar.append("🚨 <b>KRİTİK: 5+ kriter eşleşmesi tespit edildi — yakın zamanda sert hareket olabilir!</b>")
-
-        # Genel yorum
-        satirlar.append("")
-        if asagi_sayisi >= 2 and yukari_sayisi == 0:
-            satirlar.append("⚠️ <b>Tüm benzer geçmiş olaylar düşüşle sonuçlandı — stop'ları sıkıştır.</b>")
-        elif yukari_sayisi >= 2 and asagi_sayisi == 0:
-            satirlar.append("🚀 <b>Tüm benzer geçmiş olaylar yükselişle sonuçlandı — trend takibinde kal.</b>")
-        elif asagi_sayisi > yukari_sayisi:
-            satirlar.append("⚠️ <b>Benzerlik ağırlıklı düşüş yönünde — ihtiyatlı pozisyon al.</b>")
-        elif yukari_sayisi > asagi_sayisi:
-            satirlar.append("📈 <b>Benzerlik ağırlıklı yükseliş yönünde — trend pozisyonlarını koru.</b>")
+            if asagi_sayisi >= 2 and yukari_sayisi == 0:
+                satirlar.append("⚠️ <b>Geçmiş benzer olaylar düşüşle sonuçlandı — stop'ları sıkıştır.</b>")
+            elif yukari_sayisi >= 2 and asagi_sayisi == 0:
+                satirlar.append("🚀 <b>Geçmiş benzer olaylar yükselişle sonuçlandı — trend takibinde kal.</b>")
+            elif asagi_sayisi > yukari_sayisi:
+                satirlar.append("⚠️ <b>Benzerlik ağırlıklı düşüş yönünde — ihtiyatlı pozisyon al.</b>")
+            elif yukari_sayisi > asagi_sayisi:
+                satirlar.append("📈 <b>Benzerlik ağırlıklı yükseliş yönünde — trend pozisyonlarını koru.</b>")
+            else:
+                satirlar.append("↔️ <b>Benzerlik karışık yönlü — net sinyal bekle.</b>")
         else:
-            satirlar.append("↔️ <b>Benzerlik karışık yönlü — net sinyal bekle.</b>")
+            satirlar.append("— Yeterli benzer geçmiş olay bulunamadı.")
 
         satirlar.append(
             "<i>Not: 6 kriter — Funding, OI yönü, CVD uyumu, likidasyon tarafı, "
@@ -10697,8 +10697,8 @@ def _analiz_zamanlayici():
 # BAŞLAT
 # ==========================================
 
-BOT_VERSIYON = "v482"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v482 ==========")
+BOT_VERSIYON = "v483"
+print(f"[BASLANGIC] ========== BOT VERSIYON: v483 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
