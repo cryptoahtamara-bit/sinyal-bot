@@ -4,6 +4,14 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
+# bot_v482 — 9 Haziran 2026
+# Degisiklikler (v481 -> v482):
+#   1. BUG FIX: RSI asiri alim esigi >= 70 → > 70 (tam 70 asiri alim sayilmiyordu)
+#      AVAX(70) gibi durumlar artik asiri alim olarak isaretlenmeyecek
+#   2. IYILESTIRME: Market Yönü YUKARI aciklamasi duzeltildi
+#      "Tüm göstergeler" → "Çoğunluk göstergeler" (daha dogru ifade)
+#   3. IYILESTIRME: /analiz ETH long likidasyon bolge hesaplamasi
+#      Kaldıraç agirliklarinda 25x daha fazla, 100x daha az agirlik verildi
 # bot_v481 — 9 Haziran 2026
 # Degisiklikler (v480 -> v481):
 #   1. BUG FIX: Likidasyon bölgesi hesaplama yöntemi degistirildi
@@ -5360,7 +5368,7 @@ def _liq_veri_cek(symbol):
                 long_grid  = [0.0] * n_bin
                 short_grid = [0.0] * n_bin
                 # Sadece fiyata yakın kaldıraçlar: 25x/50x/100x
-                kaldıraclar = [(25, 0.35), (50, 0.40), (100, 0.25)]
+                kaldıraclar = [(25, 0.45), (50, 0.40), (100, 0.15)]  # 25x agirlik arttirildi, 100x azaltildi
                 for k in klines_15m:
                     k_open  = float(k[1])
                     k_close = float(k[4])
@@ -10346,7 +10354,7 @@ def _analiz_ozet_telegram(coin_verileri, veriler, zaman_str):
     satirlar.append("📉 <b>RSI Analizi</b>")
     satirlar.append("<i>RSI 70+ = aşırı alım, düzeltme olabilir. RSI 30- = aşırı satım, dipten dönüş olabilir.</i>")
 
-    asiri_alim  = [(s.replace("USDT",""), v.get("rsi",0)) for s,v in coin_verileri.items() if v.get("rsi") and v["rsi"] >= 70]
+    asiri_alim  = [(s.replace("USDT",""), v.get("rsi",0)) for s,v in coin_verileri.items() if v.get("rsi") and v["rsi"] > 70]
     asiri_satim = [(s.replace("USDT",""), v.get("rsi",0)) for s,v in coin_verileri.items() if v.get("rsi") and v["rsi"] <= 30]
     orta_alan   = [(s.replace("USDT",""), v.get("rsi",0)) for s,v in coin_verileri.items() if v.get("rsi") and 45 <= v["rsi"] <= 65]
 
@@ -10487,7 +10495,7 @@ def _analiz_ozet_telegram(coin_verileri, veriler, zaman_str):
 
     if puan >= 4:
         yon_ikon, yon_metin = "📈", "YUKARI"
-        yon_acikla = "Güçlü alım momentumu. Tüm göstergeler yükselişi destekliyor."
+        yon_acikla = "Güçlü alım momentumu. Çoğunluk göstergeler yükselişi destekliyor."
     elif puan >= 2:
         yon_ikon, yon_metin = "🟡", "HAFIF YUKARI"
         yon_acikla = "Yükseliş eğilimli ama henüz güçlü teyit yok. Breakout beklenmeli."
@@ -10689,8 +10697,8 @@ def _analiz_zamanlayici():
 # BAŞLAT
 # ==========================================
 
-BOT_VERSIYON = "v481"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v481 ==========")
+BOT_VERSIYON = "v482"
+print(f"[BASLANGIC] ========== BOT VERSIYON: v482 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
