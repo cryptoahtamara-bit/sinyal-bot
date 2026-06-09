@@ -4,6 +4,15 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
+# bot_v479 — 9 Haziran 2026
+# Degisiklikler (v478 -> v479):
+#   1. BUG FIX: Likidasyon bölgesi WS proxy engelinden dolayi 0 event aliyordu
+#      wss://fstream.binance.com/ws/!forceOrder@arr Railway proxy'de bloklu
+#   2. YENİ: _liq_veri_cek icinde kaldıraç bazlı likidasyon bolgesi hesaplama
+#      15dk klines verisiyle 5x/10x/25x/50x/100x kaldıraç seviyeleri hesaplanıyor
+#      En yogun long/short bolgesi agirlikli ortalama ile bulunuyor
+#      liq_long_baskisi ve liq_short_baskisi artik veri dict'inde doluyor
+#      WS verisine bagimlilik kaldirildi — proxy sorununu bypass eder
 # bot_v478 — 9 Haziran 2026
 # Degisiklikler (v477 -> v478):
 #   1. YENİ: Likidasyon WS verisi diske kaydediliyor — /data/liq_ws_data.json
@@ -5322,6 +5331,61 @@ def _liq_veri_cek(symbol):
                 "toplam_hacim": toplam_hacim,
             }
 
+        # 8) Kaldıraç bazlı likidasyon bölgesi — 15dk klines kullan
+        liq_long_baskisi  = None
+        liq_short_baskisi = None
+        try:
+            r8 = requests.get("https://fapi.binance.com/fapi/v1/klines",
+                              params={"symbol": sym, "interval": "15m", "limit": 50},
+                              timeout=6, proxies=BINANCE_PROXY)
+            klines_15m = r8.json() if r8.status_code == 200 else []
+            if len(klines_15m) >= 10:
+                import numpy as _np
+                kaldıraclar = [(10, 0.30), (25, 0.25), (50, 0.20), (100, 0.15), (5, 0.10)]
+                long_levels  = []  # (fiyat, agirlik)
+                short_levels = []
+                for k in klines_15m:
+                    k_open  = float(k[1])
+                    k_close = float(k[4])
+                    k_usd   = float(k[5]) * k_close
+                    yukari  = k_close > k_open
+                    for lev, agirlik in kaldıraclar:
+                        long_lik  = k_open * (1 - 1 / lev)
+                        short_lik = k_open * (1 + 1 / lev)
+                        long_w    = k_usd * agirlik * (1.3 if not yukari else 0.7)
+                        short_w   = k_usd * agirlik * (1.3 if yukari else 0.7)
+                        if long_lik > 0:
+                            long_levels.append((long_lik, long_w))
+                        if short_lik > 0:
+                            short_levels.append((short_lik, short_w))
+                # En yogun bolgeler: agirlikli ortalama etrafinda +/-0.5% bant
+                def en_yogun_bolge(levels, fiyat_ref, alt_mi):
+                    if not levels:
+                        return None
+                    # Fiyatin dogru tarafindaki seviyeleri filtrele
+                    if alt_mi:
+                        levels = [(p, w) for p, w in levels if p < fiyat_ref * 0.999]
+                    else:
+                        levels = [(p, w) for p, w in levels if p > fiyat_ref * 1.001]
+                    if not levels:
+                        return None
+                    # Agirlikli ortalama
+                    toplam_w = sum(w for _, w in levels)
+                    if toplam_w == 0:
+                        return None
+                    agirlikli_ort = sum(p * w for p, w in levels) / toplam_w
+                    # +/-1.5% bant
+                    bant = agirlikli_ort * 0.015
+                    yakin = [(p, w) for p, w in levels if abs(p - agirlikli_ort) < bant]
+                    if not yakin:
+                        yakin = levels
+                    fiyatlar = [p for p, _ in yakin]
+                    return (round(min(fiyatlar), 2), round(max(fiyatlar), 2))
+                liq_long_baskisi  = en_yogun_bolge(long_levels,  fiyat, True)
+                liq_short_baskisi = en_yogun_bolge(short_levels, fiyat, False)
+        except Exception as _e:
+            print(f"[LIQ] Kaldıraç bolge hesaplama hata: {_e}")
+
         return {
             "symbol": sym,
             "fiyat": fiyat,
@@ -5337,6 +5401,8 @@ def _liq_veri_cek(symbol):
             "destek": destek,
             "direnc": direnc,
             "momentum_4h": momentum_4h,
+            "liq_long_baskisi": liq_long_baskisi,
+            "liq_short_baskisi": liq_short_baskisi,
         }
     except Exception as e:
         print(f"[LIQ] {symbol} veri hatasi: {e}")
@@ -6321,14 +6387,9 @@ def _liq_yorum(veri):
     destek    = veri.get("destek")
     direnc    = veri.get("direnc")
     mom       = veri.get("momentum_4h")
-    # Gercek likidasyon bolgesi — ws verisinden hesapla
-    _bolge = _liq_ws_bolge_hesapla(veri["symbol"], fiyat)
-    if _bolge:
-        liq_long  = (_bolge[0], _bolge[1])
-        liq_short = (_bolge[2], _bolge[3])
-    else:
-        liq_long  = veri.get("liq_long_baskisi")
-        liq_short = veri.get("liq_short_baskisi")
+    # Kaldıraç bazlı likidasyon bolgesi — _liq_veri_cek icinde hesaplandı
+    liq_long  = veri.get("liq_long_baskisi")
+    liq_short = veri.get("liq_short_baskisi")
     sym_kisa  = veri["symbol"].replace("USDT", "")
     emoji     = "₿" if "BTC" in veri["symbol"] else "Ξ"
 
@@ -10615,8 +10676,8 @@ def _analiz_zamanlayici():
 # BAŞLAT
 # ==========================================
 
-BOT_VERSIYON = "v478"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v478 ==========")
+BOT_VERSIYON = "v479"
+print(f"[BASLANGIC] ========== BOT VERSIYON: v479 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
