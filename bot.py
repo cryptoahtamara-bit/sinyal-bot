@@ -4,6 +4,13 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
+# bot_v481 — 9 Haziran 2026
+# Degisiklikler (v480 -> v481):
+#   1. BUG FIX: Likidasyon bölgesi hesaplama yöntemi degistirildi
+#      Agirlikli ortalama yöntemi kaldırıldı — uzak seviyelere kayıyordu
+#      Grid bazlı hesaplama eklendi — heatmap ile aynı mantık, grafik yok
+#      Fiyat etrafı ±6% pencere, 100 bin, en yogun 3 ardisik bin seçilir
+#      Kaldıraç listesi: 25x/50x/100x (10x çıkarıldı — yine uzak düşüyordu)
 # bot_v480 — 9 Haziran 2026
 # Degisiklikler (v479 -> v480):
 #   1. BUG FIX: Likidasyon bölgesi çok geniş çıkıyordu ($49,995 — $76,092 gibi)
@@ -5337,7 +5344,7 @@ def _liq_veri_cek(symbol):
                 "toplam_hacim": toplam_hacim,
             }
 
-        # 8) Kaldıraç bazlı likidasyon bölgesi — 15dk klines kullan
+        # 8) Kaldıraç bazlı likidasyon bölgesi — grid yöntemi (heatmap ile aynı mantık)
         liq_long_baskisi  = None
         liq_short_baskisi = None
         try:
@@ -5345,11 +5352,15 @@ def _liq_veri_cek(symbol):
                               params={"symbol": sym, "interval": "15m", "limit": 50},
                               timeout=6, proxies=BINANCE_PROXY)
             klines_15m = r8.json() if r8.status_code == 200 else []
-            if len(klines_15m) >= 10:
-                import numpy as _np
-                kaldıraclar = [(10, 0.30), (25, 0.25), (50, 0.20), (100, 0.15)]  # 5x cikarildi — bölge çok geniş
-                long_levels  = []  # (fiyat, agirlik)
-                short_levels = []
+            if len(klines_15m) >= 10 and fiyat > 0:
+                # Fiyat etrafı ±6% pencere — kaldıraç seviyeleri bu bantın içinde
+                p_min = fiyat * 0.94
+                p_max = fiyat * 1.06
+                n_bin = 100  # her bin ~%0.12 genişliğinde
+                long_grid  = [0.0] * n_bin
+                short_grid = [0.0] * n_bin
+                # Sadece fiyata yakın kaldıraçlar: 25x/50x/100x
+                kaldıraclar = [(25, 0.35), (50, 0.40), (100, 0.25)]
                 for k in klines_15m:
                     k_open  = float(k[1])
                     k_close = float(k[4])
@@ -5360,35 +5371,31 @@ def _liq_veri_cek(symbol):
                         short_lik = k_open * (1 + 1 / lev)
                         long_w    = k_usd * agirlik * (1.3 if not yukari else 0.7)
                         short_w   = k_usd * agirlik * (1.3 if yukari else 0.7)
-                        if long_lik > 0:
-                            long_levels.append((long_lik, long_w))
-                        if short_lik > 0:
-                            short_levels.append((short_lik, short_w))
-                # En yogun bolgeler: agirlikli ortalama etrafinda +/-0.5% bant
-                def en_yogun_bolge(levels, fiyat_ref, alt_mi):
-                    if not levels:
+                        if p_min < long_lik < fiyat:
+                            idx = int((long_lik - p_min) / (p_max - p_min) * n_bin)
+                            idx = max(0, min(n_bin - 1, idx))
+                            long_grid[idx] += long_w
+                        if fiyat < short_lik < p_max:
+                            idx = int((short_lik - p_min) / (p_max - p_min) * n_bin)
+                            idx = max(0, min(n_bin - 1, idx))
+                            short_grid[idx] += short_w
+                # En yogun 3 ardisik bin — tıpkı heatmap mantığı
+                def grid_en_yogun(grid, p_min, p_max, n_bin):
+                    en_iyi_idx   = 0
+                    en_iyi_toplam = 0.0
+                    for i in range(len(grid) - 2):
+                        t = grid[i] + grid[i+1] + grid[i+2]
+                        if t > en_iyi_toplam:
+                            en_iyi_toplam = t
+                            en_iyi_idx = i
+                    if en_iyi_toplam == 0:
                         return None
-                    # Fiyatin dogru tarafindaki seviyeleri filtrele
-                    if alt_mi:
-                        levels = [(p, w) for p, w in levels if p < fiyat_ref * 0.999]
-                    else:
-                        levels = [(p, w) for p, w in levels if p > fiyat_ref * 1.001]
-                    if not levels:
-                        return None
-                    # Agirlikli ortalama
-                    toplam_w = sum(w for _, w in levels)
-                    if toplam_w == 0:
-                        return None
-                    agirlikli_ort = sum(p * w for p, w in levels) / toplam_w
-                    # +/-1.5% bant
-                    bant = agirlikli_ort * 0.008  # %0.8 — daha dar, daha gerçekçi
-                    yakin = [(p, w) for p, w in levels if abs(p - agirlikli_ort) < bant]
-                    if not yakin:
-                        yakin = levels
-                    fiyatlar = [p for p, _ in yakin]
-                    return (round(min(fiyatlar), 2), round(max(fiyatlar), 2))
-                liq_long_baskisi  = en_yogun_bolge(long_levels,  fiyat, True)
-                liq_short_baskisi = en_yogun_bolge(short_levels, fiyat, False)
+                    bin_w  = (p_max - p_min) / n_bin
+                    alt    = p_min + en_iyi_idx * bin_w
+                    ust    = p_min + (en_iyi_idx + 3) * bin_w
+                    return (round(alt, 2), round(ust, 2))
+                liq_long_baskisi  = grid_en_yogun(long_grid,  p_min, p_max, n_bin)
+                liq_short_baskisi = grid_en_yogun(short_grid, p_min, p_max, n_bin)
         except Exception as _e:
             print(f"[LIQ] Kaldıraç bolge hesaplama hata: {_e}")
 
@@ -10682,8 +10689,8 @@ def _analiz_zamanlayici():
 # BAŞLAT
 # ==========================================
 
-BOT_VERSIYON = "v480"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v480 ==========")
+BOT_VERSIYON = "v481"
+print(f"[BASLANGIC] ========== BOT VERSIYON: v481 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
