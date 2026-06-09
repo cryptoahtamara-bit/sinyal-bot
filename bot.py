@@ -4,6 +4,12 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
+# bot_v480 — 9 Haziran 2026
+# Degisiklikler (v479 -> v480):
+#   1. BUG FIX: Likidasyon bölgesi çok geniş çıkıyordu ($49,995 — $76,092 gibi)
+#      5x kaldıraç hesaplamadan çıkarıldı (fiyatı çok uzağa itiyordu)
+#      Artık sadece 10x/25x/50x/100x kullanılıyor
+#      Bant genişliği %1.5 -> %0.8'e indirildi — daha dar ve gerçekçi bölge
 # bot_v479 — 9 Haziran 2026
 # Degisiklikler (v478 -> v479):
 #   1. BUG FIX: Likidasyon bölgesi WS proxy engelinden dolayi 0 event aliyordu
@@ -5341,7 +5347,7 @@ def _liq_veri_cek(symbol):
             klines_15m = r8.json() if r8.status_code == 200 else []
             if len(klines_15m) >= 10:
                 import numpy as _np
-                kaldıraclar = [(10, 0.30), (25, 0.25), (50, 0.20), (100, 0.15), (5, 0.10)]
+                kaldıraclar = [(10, 0.30), (25, 0.25), (50, 0.20), (100, 0.15)]  # 5x cikarildi — bölge çok geniş
                 long_levels  = []  # (fiyat, agirlik)
                 short_levels = []
                 for k in klines_15m:
@@ -5375,7 +5381,7 @@ def _liq_veri_cek(symbol):
                         return None
                     agirlikli_ort = sum(p * w for p, w in levels) / toplam_w
                     # +/-1.5% bant
-                    bant = agirlikli_ort * 0.015
+                    bant = agirlikli_ort * 0.008  # %0.8 — daha dar, daha gerçekçi
                     yakin = [(p, w) for p, w in levels if abs(p - agirlikli_ort) < bant]
                     if not yakin:
                         yakin = levels
@@ -10676,8 +10682,8 @@ def _analiz_zamanlayici():
 # BAŞLAT
 # ==========================================
 
-BOT_VERSIYON = "v479"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v479 ==========")
+BOT_VERSIYON = "v480"
+print(f"[BASLANGIC] ========== BOT VERSIYON: v480 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
