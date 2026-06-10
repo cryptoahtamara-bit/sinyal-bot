@@ -4,10 +4,26 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
-# bot_v484 — 10 Haziran 2026
-# Degisiklikler (v483 -> v484):
-#   1. BUG FIX: Ozet metinde "F&G" → "F&amp;G" — HTML parse hatası düzeltildi
-#      Telegram HTML modunda escape edilmemiş & mesajı sessizce reddettiriyordu
+# bot_v487 — 10 Haziran 2026
+# Degisiklikler (v486 -> v487):
+#   1. IYILESTIRME: Piyasa Skoru yorumu sadece durum belirtiyor, öneri içermiyor
+#      Öneriler yalnızca "Ne Yapmalıyım?" bölümünde yer alıyor
+# bot_v486 — 10 Haziran 2026
+# Degisiklikler (v485 -> v486):
+#   1. IYILESTIRME: "Teknik Skor" → "Piyasa Skoru" olarak yeniden adlandırıldı, skor değeri parantez içinde gösteriliyor
+#   2. YENİ: "Ne Yapmalıyım?" bölümü eklendi — madde madde, genel strateji + coin bazlı öneriler
+#      - Market yönü + piyasa skoru → genel strateji
+#      - CVD birikim + RSI teyidi → dip alma adayları
+#      - Aşırı alım/satım coinleri için uyarı
+#      - Funding, HAC.Ç, breakout benzerliği uyarıları
+# bot_v485 — 10 Haziran 2026
+# Degisiklikler (v483 -> v485):
+#   1. IYILESTIRME: _analiz_ozet_telegram tamamen yeniden yazıldı
+#      - Tanımlama yok (CVD nedir, RSI nedir vb.)
+#      - Uzun açıklama yok
+#      - Tabloda zaten olan veri tekrarı yok
+#      - Kısa ve öz: her satır max 1 cümle, sadece dikkat çeken coinler/değerler
+#      - Tüm fonksiyon try/except ile sarıldı, hata olursa Telegram'a hata mesajı gelir
 # bot_v483 — 10 Haziran 2026
 # Degisiklikler (v482 -> v483):
 #   1. BUG FIX: Likidasyon bölgesi — grid/kaldıraç yöntemi kaldırıldı
@@ -10094,250 +10110,423 @@ def _analiz_ozet_metin(coin_verileri, veriler):
 
 
 def _analiz_ozet_telegram(coin_verileri, veriler, zaman_str):
-    """Telegram HTML formatında kısa piyasa özeti — tekrarsız, tanımsız."""
-
-    satirlar = [f"📡 <b>Piyasa Özeti</b> — {zaman_str}\n"]
-
-    # ── Verileri topla ──
-    breadth   = veriler.get("_breadth", 0)
-    btc_veri  = coin_verileri.get("BTCUSDT", {})
-    btc_cvd_d = btc_veri.get("cvd")
-    btc_fund  = btc_veri.get("funding", 0) or 0
-
+    """Telegram HTML — kısa, öz, tanımsız, tekrarsız."""
     try:
-        fg_deger, fg_sinif = _trend_fear_greed()
-    except Exception:
-        fg_deger, fg_sinif = None, "—"
-    try:
-        btc_dom, _, _, _ = _trend_btc_dominans()
-    except Exception:
-        btc_dom = None
+        satirlar = [f"📡 <b>Piyasa Özeti</b> — {zaman_str}\n"]
 
-    skorlar  = [v.get("skor", 0) for v in coin_verileri.values() if v.get("skor") is not None]
-    ort_skor = round(sum(skorlar)/len(skorlar)) if skorlar else 0
+        breadth   = veriler.get("_breadth", 0)
+        btc_veri  = coin_verileri.get("BTCUSDT", {})
+        btc_fund  = btc_veri.get("funding", 0) or 0
+        btc_cvd_d = btc_veri.get("cvd")
 
-    # CVD uyumsuzlukları
-    uyumsuz_yukari = []
-    uyumsuz_asagi  = []
-    for sym, v in coin_verileri.items():
-        cvd = v.get("cvd")
-        if not cvd: continue
-        kisa = sym.replace("USDT","")
-        if cvd.get("uyum") == "uyumsuz_yukari":
-            uyumsuz_yukari.append(kisa)
-        elif cvd.get("uyum") == "uyumsuz_asagi":
-            uyumsuz_asagi.append(kisa)
+        skorlar  = [v.get("skor", 0) for v in coin_verileri.values() if v.get("skor") is not None]
+        ort_skor = round(sum(skorlar) / len(skorlar)) if skorlar else 0
 
-    # Likidasyon
-    toplam_lik = long_lik = short_lik = 0.0
-    for v in coin_verileri.values():
-        lik = v.get("likidasyonlar")
-        if lik:
-            toplam_lik += lik.get("toplam_usd", 0)
-            long_lik   += lik.get("long_usd", 0)
-            short_lik  += lik.get("short_usd", 0)
+        # CVD uyumsuzlukları
+        uyumsuz_yukari, uyumsuz_asagi = [], []
+        for sym, v in coin_verileri.items():
+            cvd = v.get("cvd")
+            if not cvd: continue
+            kisa = sym.replace("USDT", "")
+            uyum = cvd.get("uyum", "")
+            if uyum == "uyumsuz_yukari": uyumsuz_yukari.append(kisa)
+            elif uyum == "uyumsuz_asagi": uyumsuz_asagi.append(kisa)
 
-    # Taker
-    taker_long_c  = sum(1 for v in coin_verileri.values()
-                       if v.get("taker") and v["taker"].get("taker_buy_pct",50) >= 55)
-    taker_short_c = sum(1 for v in coin_verileri.values()
-                       if v.get("taker") and v["taker"].get("taker_buy_pct",50) <= 45)
-    taker_toplam  = sum(1 for v in coin_verileri.values() if v.get("taker"))
+        # Likidasyon
+        toplam_lik = long_lik = short_lik = 0.0
+        for v in coin_verileri.values():
+            lik = v.get("likidasyonlar")
+            if lik:
+                toplam_lik += lik.get("toplam_usd", 0)
+                long_lik   += lik.get("long_usd", 0)
+                short_lik  += lik.get("short_usd", 0)
 
-    # ── 1) GENEL DURUM ──
-    if ort_skor >= 70 and breadth >= 7:
-        durum_ikon, durum = "🟢", f"Güçlü yükseliş — {breadth}/10 EMA20 üstünde"
-    elif ort_skor >= 55 and breadth >= 5:
-        durum_ikon, durum = "🟡", f"Yükseliş eğilimli — {breadth}/10 EMA20 üstünde"
-    elif ort_skor >= 40:
-        durum_ikon, durum = "⚪", f"Yön belirsiz — {breadth}/10 EMA20 üstünde"
-    else:
-        durum_ikon, durum = "🔴", f"Satış baskısı — {breadth}/10 EMA20 üstünde"
+        # Taker
+        taker_long_c  = sum(1 for v in coin_verileri.values()
+                            if v.get("taker") and v["taker"].get("taker_buy_pct", 50) >= 55)
+        taker_short_c = sum(1 for v in coin_verileri.values()
+                            if v.get("taker") and v["taker"].get("taker_buy_pct", 50) <= 45)
+        taker_toplam  = sum(1 for v in coin_verileri.values() if v.get("taker"))
 
-    fg_str  = f"{fg_deger} ({fg_sinif})" if fg_deger else "—"
-    dom_str = f"%{btc_dom:.1f}" if btc_dom else "—"
-    satirlar.append(f"{durum_ikon} <b>Genel Durum:</b> {durum}")
-    satirlar.append(f"📊 Ort.Skor: <b>{ort_skor}</b>  |  F&amp;G: <b>{fg_str}</b>  |  BTC Dom: <b>{dom_str}</b>")
+        # ── MARKET YÖNÜ PUANI ──
+        puan = 0
+        if ort_skor >= 65:    puan += 2
+        elif ort_skor >= 50:  puan += 1
+        elif ort_skor < 40:   puan -= 2
+        if breadth >= 7:      puan += 2
+        elif breadth >= 5:    puan += 1
+        elif breadth <= 3:    puan -= 2
+        if taker_long_c >= 6:    puan += 2
+        elif taker_short_c >= 6: puan -= 2
+        if short_lik > long_lik * 2 and toplam_lik >= 1.0: puan += 1
+        elif long_lik > short_lik * 2 and toplam_lik >= 1.0: puan -= 1
+        if len(uyumsuz_yukari) >= 4: puan -= 1
+        if len(uyumsuz_asagi) >= 3:  puan += 1
+        if btc_fund > 0.02:   puan -= 1
+        elif btc_fund < -0.01: puan += 1
 
-    # ── 2) CVD ──
-    satirlar.append("")
-    if uyumsuz_yukari:
-        satirlar.append(f"⚠️ <b>Sahte pump riski:</b> {', '.join(uyumsuz_yukari)} — fiyat ↑ ama CVD ↓")
-    if uyumsuz_asagi:
-        satirlar.append(f"💡 <b>Birikim sinyali:</b> {', '.join(uyumsuz_asagi)} — fiyat ↓ ama CVD ↑")
-    if not uyumsuz_yukari and not uyumsuz_asagi:
-        satirlar.append("✅ CVD fiyatla uyumlu — momentum organik.")
+        if puan >= 4:    yon_ikon, yon_metin = "📈", "Yukarı Yönlü"
+        elif puan >= 2:  yon_ikon, yon_metin = "🟡", "Hafif Yukarı Yönlü"
+        elif puan <= -4: yon_ikon, yon_metin = "📉", "Aşağı Yönlü"
+        elif puan <= -2: yon_ikon, yon_metin = "🟠", "Hafif Aşağı Yönlü"
+        else:            yon_ikon, yon_metin = "↔️", "Yatay / Belirsiz"
 
-    if btc_cvd_d:
-        cvd_val = btc_cvd_d["cvd"]
-        if cvd_val > 3000:
-            satirlar.append(f"🔥 BTC CVD: <b>+{cvd_val:,.0f}</b> — güçlü alım baskısı")
-        elif cvd_val > 500:
-            satirlar.append(f"📈 BTC CVD: <b>+{cvd_val:,.0f}</b> — hafif alıcı üstünlüğü")
-        elif cvd_val < -3000:
-            satirlar.append(f"🧊 BTC CVD: <b>{cvd_val:,.0f}</b> — ağır satış baskısı")
-        elif cvd_val < -500:
-            satirlar.append(f"📉 BTC CVD: <b>{cvd_val:,.0f}</b> — satıcı üstünlüğü")
-        else:
-            satirlar.append(f"↔️ BTC CVD: <b>{cvd_val:+,.0f}</b> — dengeli")
+        # ── 1) CVD ──
+        if uyumsuz_asagi or uyumsuz_yukari or btc_cvd_d:
+            parcalar = []
+            if uyumsuz_asagi:
+                parcalar.append(f"<b>{', '.join(uyumsuz_asagi)}</b> düşüş suni olabilir, dip alma fırsatı")
+            if uyumsuz_yukari:
+                parcalar.append(f"<b>{', '.join(uyumsuz_yukari)}</b> pump suni olabilir, dikkatli ol")
+            if btc_cvd_d:
+                cvd_val = btc_cvd_d.get("cvd", 0)
+                if cvd_val > 1000:
+                    parcalar.append("BTC güçlü alım baskısı, yükseliş destekli")
+                elif cvd_val > 0:
+                    parcalar.append("BTC hafif alıcı üstünlüğü")
+                elif cvd_val < -1000:
+                    parcalar.append("BTC ağır satış baskısı, düşüş destekli")
+                else:
+                    parcalar.append("BTC hafif satıcı üstünlüğü")
+            satirlar.append("💡 <b>CVD:</b> " + ". ".join(parcalar) + ".")
 
-    # ── 3) LİKİDASYON ──
-    satirlar.append("")
-    if toplam_lik >= 0.5:
-        if long_lik > short_lik * 2:
-            satirlar.append(f"📉 <b>Likidasyon:</b> {toplam_lik:.1f}M$ — ağırlıklı long ezildi ({long_lik:.1f}M$). Kısa vadede satış baskısı.")
-        elif short_lik > long_lik * 2:
-            satirlar.append(f"📈 <b>Likidasyon:</b> {toplam_lik:.1f}M$ — short squeeze ({short_lik:.1f}M$). Yükseliş ivmesi var.")
-        else:
-            satirlar.append(f"↔️ <b>Likidasyon:</b> {toplam_lik:.1f}M$ — dengeli (long {long_lik:.1f}M$, short {short_lik:.1f}M$).")
-    else:
-        satirlar.append("💤 Son 30dk'da kayda değer likidasyon yok.")
-
-    # ── 4) BTC FUNDING ──
-    if abs(btc_fund) >= 0.02:
-        if btc_fund > 0:
-            satirlar.append(f"⚠️ BTC Funding: <b>{btc_fund:+.4f}%</b> — long kalabalık, düzeltme riski.")
-        else:
-            satirlar.append(f"⚠️ BTC Funding: <b>{btc_fund:+.4f}%</b> — short kalabalık, squeeze riski.")
-    elif abs(btc_fund) >= 0.005:
-        yorum = "long hafif baskın" if btc_fund > 0 else "short hafif baskın"
-        satirlar.append(f"💰 BTC Funding: <b>{btc_fund:+.4f}%</b> — {yorum}.")
-    else:
-        satirlar.append(f"💰 BTC Funding: <b>{btc_fund:+.4f}%</b> — dengeli.")
-
-    # ── 5) SKOR / RSI / OI — yalnız dikkat çekenler ──
-    satirlar.append("")
-    guclu = [(s.replace("USDT",""), v.get("skor",0)) for s,v in coin_verileri.items() if v.get("skor",0) >= 70]
-    zayif = [(s.replace("USDT",""), v.get("skor",0)) for s,v in coin_verileri.items() if v.get("skor",0) < 40]
-    guclu.sort(key=lambda x: -x[1]); zayif.sort(key=lambda x: x[1])
-    if guclu:
-        satirlar.append(f"💪 Güçlü (70+): {', '.join([f'{n}({sc})' for n,sc in guclu[:4]])}")
-    if zayif:
-        satirlar.append(f"⚠️ Zayıf (<40): {', '.join([f'{n}({sc})' for n,sc in zayif[:3]])}")
-
-    asiri_alim  = [(s.replace("USDT",""), v.get("rsi",0)) for s,v in coin_verileri.items() if v.get("rsi") and v["rsi"] > 70]
-    asiri_satim = [(s.replace("USDT",""), v.get("rsi",0)) for s,v in coin_verileri.items() if v.get("rsi") and v["rsi"] <= 30]
-    if asiri_alim:
-        str_aa = ", ".join([f"{n}({r:.0f})" for n,r in sorted(asiri_alim, key=lambda x:-x[1])])
-        satirlar.append(f"🔴 RSI aşırı alım: <b>{str_aa}</b>")
-    if asiri_satim:
-        str_as = ", ".join([f"{n}({r:.0f})" for n,r in sorted(asiri_satim, key=lambda x:x[1])])
-        satirlar.append(f"🟢 RSI aşırı satım: <b>{str_as}</b>")
-
-    oi_artan  = [(s.replace("USDT",""), v["oi_delta"]["delta_pct"]) for s,v in coin_verileri.items()
-                 if v.get("oi_delta") and v["oi_delta"]["delta_pct"] > 0.3]
-    oi_azalan = [(s.replace("USDT",""), v["oi_delta"]["delta_pct"]) for s,v in coin_verileri.items()
-                 if v.get("oi_delta") and v["oi_delta"]["delta_pct"] < -0.3]
-    oi_artan.sort(key=lambda x: -x[1]); oi_azalan.sort(key=lambda x: x[1])
-    if oi_artan:
-        satirlar.append(f"📦 OI artanlar: {', '.join([f'{n}(+{p:.1f}%)' for n,p in oi_artan[:4]])}")
-    if oi_azalan:
-        satirlar.append(f"📦 OI azalanlar: {', '.join([f'{n}({p:.1f}%)' for n,p in oi_azalan[:3]])}")
-
-    # ── 6) MARKET YÖNÜ ──
-    satirlar.append("")
-    puan = 0
-    notlar = []
-
-    if ort_skor >= 65: puan += 2; notlar.append(f"skor {ort_skor} güçlü")
-    elif ort_skor >= 50: puan += 1; notlar.append(f"skor {ort_skor} orta")
-    elif ort_skor < 40: puan -= 2; notlar.append(f"skor {ort_skor} zayıf")
-
-    if breadth >= 7: puan += 2; notlar.append(f"breadth {breadth}/10 geniş")
-    elif breadth >= 5: puan += 1
-    elif breadth <= 3: puan -= 2; notlar.append(f"breadth {breadth}/10 dar")
-
-    if taker_long_c >= 6: puan += 2; notlar.append(f"{taker_long_c}/{taker_toplam} coinDE alıcı taker")
-    elif taker_short_c >= 6: puan -= 2; notlar.append(f"{taker_short_c}/{taker_toplam} coinDE satıcı taker")
-
-    if short_lik > long_lik * 2 and toplam_lik >= 1.0: puan += 1; notlar.append("short squeeze var")
-    elif long_lik > short_lik * 2 and toplam_lik >= 1.0: puan -= 1; notlar.append("long ezilmiş")
-
-    if len(uyumsuz_yukari) >= 4: puan -= 1; notlar.append(f"{len(uyumsuz_yukari)} coinDE sahte pump riski")
-    if len(uyumsuz_asagi) >= 3: puan += 1; notlar.append(f"{len(uyumsuz_asagi)} coinDE birikim sinyali")
-
-    if btc_fund > 0.02: puan -= 1; notlar.append("funding aşırı yüksek")
-    elif btc_fund < -0.01: puan += 1; notlar.append("negatif funding")
-
-    if puan >= 4:
-        yon_ikon, yon_metin = "📈", "YUKARI"
-        if ort_skor >= 65 and breadth >= 7:
-            yon_acikla = "Güçlü alım momentumu."
-        else:
-            yon_acikla = "Yükseliş sinyali var, teknik teyit henüz tam değil."
-    elif puan >= 2:
-        yon_ikon, yon_metin = "🟡", "HAFIF YUKARI"
-        yon_acikla = "Eğilim yukarı ama breakout beklenmeli."
-    elif puan <= -4:
-        yon_ikon, yon_metin = "📉", "AŞAĞI"
-        yon_acikla = "Satış baskısı hâkim."
-    elif puan <= -2:
-        yon_ikon, yon_metin = "🟠", "HAFIF AŞAĞI"
-        yon_acikla = "Zayıf yapı, yeni long riskli."
-    else:
-        yon_ikon, yon_metin = "↔️", "YATAY / BELİRSİZ"
-        yon_acikla = "Net yön yok, sinyal bekle."
-
-    satirlar.append(f"🧭 <b>Market Yönü:</b> {yon_ikon} <b>{yon_metin}</b> (Puan: {puan:+d})")
-    satirlar.append(f"  {yon_acikla}")
-    if notlar:
-        satirlar.append(f"  <i>{' · '.join(notlar)}</i>")
-
-    # ── 7) GEÇMİŞ BREAKOUT BENZERLİĞİ ──
-    satirlar.append("")
-    try:
-        if len(uyumsuz_yukari) >= len(uyumsuz_asagi) and len(uyumsuz_yukari) > 0:
-            mevcut_cvd_uyum = "uyumsuz_yukari"
-        elif len(uyumsuz_asagi) > 0:
-            mevcut_cvd_uyum = "uyumsuz_asagi"
-        else:
-            mevcut_cvd_uyum = "uyumlu"
-
-        if toplam_lik < 0.3:
-            mevcut_lik_taraf = "dengeli"
-        elif long_lik > short_lik * 1.5:
-            mevcut_lik_taraf = "long"
-        elif short_lik > long_lik * 1.5:
-            mevcut_lik_taraf = "short"
-        else:
-            mevcut_lik_taraf = "dengeli"
-
-        btc_oi_d = btc_veri.get("oi_delta")
-        mevcut_oi_delta   = btc_oi_d["delta_pct"] if btc_oi_d else 0.0
-        mevcut_fg_deger   = fg_deger
-        mevcut_breadth_n  = breadth
-        mevcut_toplam_n   = len(coin_verileri)
-
-        benzer_olaylar = _breakout_benzerlik_hesapla(
-            btc_fund, mevcut_oi_delta, mevcut_cvd_uyum, mevcut_lik_taraf,
-            fg_deger=mevcut_fg_deger,
-            breadth_sayi=mevcut_breadth_n,
-            toplam_coin=mevcut_toplam_n,
-        )
-
-        if benzer_olaylar:
-            en_iyi_puan, en_iyi_eslesme, en_iyi_olay = benzer_olaylar[0]
-            ikon = "📉" if en_iyi_olay["yon"] == "asagi" else "📈"
-            if en_iyi_eslesme >= 5:
-                ikon = "🚨" + ikon
-                satirlar.append("🚨 <b>KRİTİK: 5+ kriter eşleşmesi!</b>")
-            satirlar.append(
-                f"⚡ <b>Geçmiş benzerlik %{en_iyi_puan}:</b> {ikon} {en_iyi_olay['ad']} ({en_iyi_olay['tarih']}) "
-                f"— {en_iyi_olay['hareket_pct']:+d}% oldu ({en_iyi_olay['sure_gun']}g)"
-            )
-            asagi_sayisi = sum(1 for _, _, o in benzer_olaylar if o["yon"] == "asagi")
-            yukari_sayisi = sum(1 for _, _, o in benzer_olaylar if o["yon"] == "yukari")
-            if asagi_sayisi > yukari_sayisi:
-                satirlar.append("  ⚠️ Benzer olaylar ağırlıklı düşüşle sonuçlandı.")
-            elif yukari_sayisi > asagi_sayisi:
-                satirlar.append("  📈 Benzer olaylar ağırlıklı yükselişle sonuçlandı.")
+        # ── 2) LİKİDASYON ──
+        if toplam_lik >= 0.1:
+            lik_usd_str = f"${toplam_lik:.2f}M" if toplam_lik < 1 else f"${toplam_lik:.1f}M"
+            if long_lik > short_lik * 2:
+                lik_yorum = f"ağırlıklı long tasfiyesi ({lik_usd_str}), satış baskısı artabilir"
+            elif short_lik > long_lik * 2:
+                lik_yorum = f"ağırlıklı short tasfiyesi ({lik_usd_str}), yükseliş ivmesi var"
             else:
-                satirlar.append("  ↔️ Benzer olaylar karışık yönlü.")
-    except Exception as e:
-        print(f"[ANALIZ] Breakout benzerlik hatasi: {e}")
+                lik_yorum = f"{lik_usd_str} dengeli tasfiye"
+            satirlar.append(f"💥 <b>Likidasyon:</b> Son 30dk'da {lik_usd_str} likidasyon mevcut — {lik_yorum}.")
+        else:
+            satirlar.append("💥 <b>Likidasyon:</b> Son 30dk'da kayda değer likidasyon yok.")
 
-    satirlar.append(f"\n<i>Kaynak: Binance Futures + Spot  ·  {zaman_str}</i>")
-    return "\n".join(satirlar)
+        # ── 3) FUNDING ──
+        if abs(btc_fund) >= 0.02:
+            fund_yorum = "long kalabalık, düzeltme riski" if btc_fund > 0 else "short kalabalık, squeeze riski"
+            satirlar.append(f"💰 <b>BTC Funding:</b> {btc_fund:+.4f}% — {fund_yorum}.")
+        elif abs(btc_fund) >= 0.005:
+            fund_yorum = "long baskın" if btc_fund > 0 else "short baskın"
+            satirlar.append(f"💰 <b>BTC Funding:</b> {btc_fund:+.4f}% — {fund_yorum}.")
+        else:
+            satirlar.append(f"💰 <b>BTC Funding:</b> {btc_fund:+.4f}% — eşit maliyette.")
+
+        # ── 4) RSI ──
+        asiri_alim  = [(s.replace("USDT",""), v["rsi"]) for s,v in coin_verileri.items()
+                       if v.get("rsi") and v["rsi"] > 70]
+        asiri_satim = [(s.replace("USDT",""), v["rsi"]) for s,v in coin_verileri.items()
+                       if v.get("rsi") and v["rsi"] <= 30]
+        if asiri_alim and asiri_satim:
+            str_aa = ", ".join([f"{n}({r:.0f})" for n,r in sorted(asiri_alim, key=lambda x:-x[1])])
+            str_as = ", ".join([f"{n}({r:.0f})" for n,r in sorted(asiri_satim, key=lambda x:x[1])])
+            satirlar.append(f"📊 <b>RSI:</b> Aşırı alım: <b>{str_aa}</b> — Aşırı satım: <b>{str_as}</b>.")
+        elif asiri_alim:
+            str_aa = ", ".join([f"{n}({r:.0f})" for n,r in sorted(asiri_alim, key=lambda x:-x[1])])
+            satirlar.append(f"📊 <b>RSI:</b> <b>{str_aa}</b> aşırı alım bölgesinde, yeni long riskli.")
+        elif asiri_satim:
+            str_as = ", ".join([f"{n}({r:.0f})" for n,r in sorted(asiri_satim, key=lambda x:x[1])])
+            satirlar.append(f"📊 <b>RSI:</b> <b>{str_as}</b> aşırı satım bölgesinde, dönüş fırsatı olabilir.")
+        else:
+            satirlar.append("📊 <b>RSI:</b> Aşırı alım/satım yok, trendi takip etmeye elverişli ortam.")
+
+        # ── 5) OI (Açık Pozisyon) ──
+        oi_artan  = [(s.replace("USDT",""), v["oi_delta"]["delta_pct"]) for s,v in coin_verileri.items()
+                     if v.get("oi_delta") and v["oi_delta"]["delta_pct"] > 0.3]
+        oi_azalan = [(s.replace("USDT",""), v["oi_delta"]["delta_pct"]) for s,v in coin_verileri.items()
+                     if v.get("oi_delta") and v["oi_delta"]["delta_pct"] < -0.3]
+        oi_artan.sort(key=lambda x: -x[1])
+        oi_azalan.sort(key=lambda x: x[1])
+        if oi_artan:
+            str_art = ", ".join([n for n,_ in oi_artan[:4]])
+            satirlar.append(f"📈 <b>Artan Pozisyon:</b> <b>{str_art}</b> için pozisyonlar açılıyor, piyasa büyüyor.")
+        if oi_azalan:
+            str_az = ", ".join([n for n,_ in oi_azalan[:4]])
+            satirlar.append(f"📉 <b>Azalan Pozisyon:</b> <b>{str_az}</b> için pozisyonlar kapanıyor.")
+
+        # ── 6) HAC.Ç ──
+        hac_yuksek = [(s.replace("USDT",""), v.get("hac_carpan", 0)) for s,v in coin_verileri.items()
+                      if v.get("hac_carpan") and v["hac_carpan"] >= 5]
+        hac_yuksek.sort(key=lambda x: -x[1])
+        if hac_yuksek:
+            str_hac = ", ".join([f"{n}({h:.1f}x)" for n,h in hac_yuksek[:4]])
+            satirlar.append(f"⚡ <b>HAC.Ç:</b> <b>{str_hac}</b> için spekülatif hareket ağırlıklı olarak futures piyasasından geliyor.")
+
+        # ── 7) PİYASA SKORU ──
+        if ort_skor >= 70 and breadth >= 7:
+            skor_yorum = "güçlü yükseliş sinyali."
+        elif ort_skor >= 55:
+            skor_yorum = "yükseliş eğilimli."
+        elif ort_skor >= 40:
+            skor_yorum = "karışık sinyaller, net yön yok."
+        elif ort_skor >= 25:
+            skor_yorum = "satış baskısı hakim."
+        else:
+            skor_yorum = "düşüş baskısı güçlü."
+        satirlar.append(f"🏆 <b>Piyasa Skoru ({ort_skor}):</b> {skor_yorum.capitalize()}")
+
+        # ── 8) MARKET YÖNÜ ──
+        if abs(puan) >= 4:
+            yon_ek = " Yakın zamanda sert kırılım olabilir."
+        else:
+            yon_ek = ""
+        satirlar.append(f"🧭 <b>Market Yönü:</b> {yon_ikon} <b>{yon_metin}</b>.{yon_ek}")
+
+        # ── 9) BREAKOUT BENZERLİĞİ ──
+        benzer_olay_bilgi = None
+        try:
+            cvd_uyum_str = ("uyumsuz_yukari" if len(uyumsuz_yukari) >= len(uyumsuz_asagi) and uyumsuz_yukari
+                            else "uyumsuz_asagi" if uyumsuz_asagi else "uyumlu")
+            lik_taraf = ("long" if long_lik > short_lik * 1.5 else
+                         "short" if short_lik > long_lik * 1.5 else "dengeli")
+            btc_oi_d = btc_veri.get("oi_delta")
+            oi_delta = btc_oi_d["delta_pct"] if btc_oi_d else 0.0
+            fg_deger = None
+            try: fg_deger, _ = _trend_fear_greed()
+            except Exception: pass
+
+            benzer = _breakout_benzerlik_hesapla(
+                btc_fund, oi_delta, cvd_uyum_str, lik_taraf,
+                fg_deger=fg_deger, breadth_sayi=breadth, toplam_coin=len(coin_verileri)
+            )
+            if benzer:
+                puan_b, eslesme, olay = benzer[0]
+                yon_b   = "Piyasa Çöküşü" if olay["yon"] == "asagi" else "Piyasa Yükselişi"
+                ikon_b  = "📉" if olay["yon"] == "asagi" else "📈"
+                kritik  = " 🚨 Yakın zamanda sert hareket olabilir!" if eslesme >= 5 else ""
+                asagi_s = sum(1 for _,_,o in benzer if o["yon"] == "asagi")
+                yukari_s = sum(1 for _,_,o in benzer if o["yon"] == "yukari")
+                if asagi_s > yukari_s:
+                    senaryo_yorum = " ⚠️ Benzer senaryolar düşüşle kapandı."
+                elif yukari_s > asagi_s:
+                    senaryo_yorum = " 📈 Benzer senaryolar yükselişle kapandı."
+                else:
+                    senaryo_yorum = " ↔️ Benzer senaryolar karışık yönlü."
+                satirlar.append(
+                    f"\n⚡ <b>Geçmiş {yon_b} Benzerliği (%{puan_b}):</b> {ikon_b} {olay['ad']} "
+                    f"({olay['tarih']}) — {olay['hareket_pct']:+d}% ({olay['sure_gun']}g)."
+                    f"{senaryo_yorum}{kritik}"
+                )
+                benzer_olay_bilgi = (olay["yon"], eslesme)
+        except Exception as e:
+            print(f"[ANALIZ] Breakout benzerlik hatasi: {e}")
+
+        # ── 10) NE YAPMALIYIM? ──
+        satirlar.append("\n🎯 <b>Ne Yapmalıyım?</b>")
+        oneriler = []
+
+        # Genel strateji
+        if puan <= -4:
+            oneriler.append("⛔ Yeni long pozisyon açma. Mevcut longları gözden geçir, stop'ları sıkıştır.")
+        elif puan <= -2:
+            oneriler.append("⚠️ Long pozisyonlarda temkinli ol. Yüksek kaldıraçtan kaçın, stop'ları dar tut.")
+        elif puan >= 4:
+            oneriler.append("✅ Trend yukarı yönlü. Yüksek skorlu coinlerde long fırsatları değerlendirilebilir.")
+        elif puan >= 2:
+            oneriler.append("🟡 Yükseliş eğilimi var ancak teyit bekleniyor. Küçük pozisyonlarla gir, acele etme.")
+        else:
+            oneriler.append("⏸️ Net yön yok. Breakout veya net sinyal bekle, pozisyon açma.")
+
+        # CVD bazlı coin önerileri
+        if uyumsuz_asagi and puan >= 0:
+            dip_adaylar = []
+            for sym in [s+"USDT" for s in uyumsuz_asagi[:3]]:
+                v = coin_verileri.get(sym, {})
+                rsi = v.get("rsi", 50)
+                skor = v.get("skor", 0)
+                if rsi <= 35 and skor >= 50:
+                    dip_adaylar.append(sym.replace("USDT",""))
+            if dip_adaylar:
+                oneriler.append(f"💡 Dip alma adayları: <b>{', '.join(dip_adaylar)}</b> — CVD birikim + RSI satım bölgesi. Stop'lu gir.")
+            else:
+                oneriler.append(f"💡 CVD birikim sinyali var (<b>{', '.join(uyumsuz_asagi[:3])}</b>) ancak RSI teyidi bekleniyor.")
+
+        if uyumsuz_yukari and puan <= 0:
+            oneriler.append(f"⚠️ <b>{', '.join(uyumsuz_yukari[:3])}</b> pump suni görünüyor — long girmek riskli, short fırsatı olabilir.")
+
+        # RSI bazlı
+        asiri_satim_coins = [(s.replace("USDT",""), v["rsi"]) for s,v in coin_verileri.items()
+                             if v.get("rsi") and v["rsi"] <= 28]
+        if asiri_satim_coins and puan >= -2:
+            str_as2 = ", ".join([f"<b>{n}</b>({r:.0f})" for n,r in sorted(asiri_satim_coins, key=lambda x:x[1])[:3]])
+            oneriler.append(f"🟢 {str_as2} aşırı satım bölgesinde — dipten dönüş için takibe al.")
+
+        asiri_alim_coins = [(s.replace("USDT",""), v["rsi"]) for s,v in coin_verileri.items()
+                            if v.get("rsi") and v["rsi"] >= 75]
+        if asiri_alim_coins:
+            str_aa2 = ", ".join([f"<b>{n}</b>({r:.0f})" for n,r in sorted(asiri_alim_coins, key=lambda x:-x[1])[:3]])
+            oneriler.append(f"🔴 {str_aa2} aşırı alım bölgesinde — mevcut pozisyonda stop sıkıştır, yeni long açma.")
+
+        # Funding uyarısı
+        if btc_fund > 0.02:
+            oneriler.append("💸 Funding yüksek — long maliyeti artıyor, kısa vadeli longlardan çık.")
+        elif btc_fund < -0.01:
+            oneriler.append("💸 Negatif funding — short pozisyon taşıma maliyeti yüksek, shortları yönet.")
+
+        # HAC.Ç uyarısı
+        if hac_yuksek and len(hac_yuksek) >= 3:
+            oneriler.append(f"⚡ Yüksek HAC.Ç nedeniyle ani ters hareket riski var — geniş stop kullan veya pozisyon küçük tut.")
+
+        # Breakout benzerliği uyarısı
+        if benzer_olay_bilgi:
+            yon_b2, eslesme_b2 = benzer_olay_bilgi
+            if eslesme_b2 >= 5:
+                if yon_b2 == "asagi":
+                    oneriler.append("🚨 Geçmiş benzerlik kritik eşikte — tüm açık longları gözden geçir, stop'suz pozisyon taşıma.")
+                else:
+                    oneriler.append("🚨 Geçmiş benzerlik kritik eşikte — kırılım yukarı olursa hızlı hareket edebilir, hazırlıklı ol.")
+
+        for o in oneriler:
+            satirlar.append(f"  • {o}")
+
+        satirlar.append(f"\n<i>{zaman_str}  ·  Binance Futures + Spot</i>")
+        return "\n".join(satirlar)
+
+    except Exception as e:
+        print(f"[ANALIZ] ozet_telegram hata: {e}")
+        traceback.print_exc()
+        return f"📡 <b>Piyasa Özeti</b> — {zaman_str}\n\n⚠️ Özet üretilemedi: {e}"
+
+        breadth  = veriler.get("_breadth", 0)
+        btc_veri = coin_verileri.get("BTCUSDT", {})
+        btc_fund = btc_veri.get("funding", 0) or 0
+        btc_cvd_d = btc_veri.get("cvd")
+
+        skorlar  = [v.get("skor", 0) for v in coin_verileri.values() if v.get("skor") is not None]
+        ort_skor = round(sum(skorlar) / len(skorlar)) if skorlar else 0
+
+        # CVD uyumsuzlukları
+        uyumsuz_yukari, uyumsuz_asagi = [], []
+        for sym, v in coin_verileri.items():
+            cvd = v.get("cvd")
+            if not cvd: continue
+            kisa = sym.replace("USDT", "")
+            uyum = cvd.get("uyum", "")
+            if uyum == "uyumsuz_yukari": uyumsuz_yukari.append(kisa)
+            elif uyum == "uyumsuz_asagi": uyumsuz_asagi.append(kisa)
+
+        # Likidasyon
+        toplam_lik = long_lik = short_lik = 0.0
+        for v in coin_verileri.values():
+            lik = v.get("likidasyonlar")
+            if lik:
+                toplam_lik += lik.get("toplam_usd", 0)
+                long_lik   += lik.get("long_usd", 0)
+                short_lik  += lik.get("short_usd", 0)
+
+        # Taker
+        taker_long_c  = sum(1 for v in coin_verileri.values()
+                            if v.get("taker") and v["taker"].get("taker_buy_pct", 50) >= 55)
+        taker_short_c = sum(1 for v in coin_verileri.values()
+                            if v.get("taker") and v["taker"].get("taker_buy_pct", 50) <= 45)
+        taker_toplam  = sum(1 for v in coin_verileri.values() if v.get("taker"))
+
+        # ── MARKET YÖNÜ PUANI ──
+        puan = 0
+        if ort_skor >= 65:   puan += 2
+        elif ort_skor >= 50: puan += 1
+        elif ort_skor < 40:  puan -= 2
+        if breadth >= 7:     puan += 2
+        elif breadth >= 5:   puan += 1
+        elif breadth <= 3:   puan -= 2
+        if taker_long_c >= 6:   puan += 2
+        elif taker_short_c >= 6: puan -= 2
+        if short_lik > long_lik * 2 and toplam_lik >= 1.0: puan += 1
+        elif long_lik > short_lik * 2 and toplam_lik >= 1.0: puan -= 1
+        if len(uyumsuz_yukari) >= 4: puan -= 1
+        if len(uyumsuz_asagi) >= 3:  puan += 1
+        if btc_fund > 0.02: puan -= 1
+        elif btc_fund < -0.01: puan += 1
+
+        if puan >= 4:    yon_ikon, yon_metin = "📈", "YUKARI"
+        elif puan >= 2:  yon_ikon, yon_metin = "🟡", "HAFIF YUKARI"
+        elif puan <= -4: yon_ikon, yon_metin = "📉", "AŞAĞI"
+        elif puan <= -2: yon_ikon, yon_metin = "🟠", "HAFIF AŞAĞI"
+        else:            yon_ikon, yon_metin = "↔️", "YATAY"
+
+        # ── ÇIKTI ──
+
+        # 1) Yön + özet
+        satirlar.append(f"{yon_ikon} <b>{yon_metin}</b> (Puan: {puan:+d})")
+
+        # 2) CVD — sadece uyumsuzluk varsa
+        if uyumsuz_asagi:
+            satirlar.append(f"💡 Birikim: <b>{', '.join(uyumsuz_asagi)}</b>")
+        if uyumsuz_yukari:
+            satirlar.append(f"⚠️ Sahte pump riski: <b>{', '.join(uyumsuz_yukari)}</b>")
+        if btc_cvd_d:
+            cvd_val = btc_cvd_d.get("cvd", 0)
+            if abs(cvd_val) >= 500:
+                cvd_yorum = "alım baskısı" if cvd_val > 0 else "satış baskısı"
+                satirlar.append(f"📊 BTC CVD: <b>{cvd_val:+,.0f}</b> — {cvd_yorum}")
+
+        # 3) Likidasyon — sadece anlamlıysa
+        if toplam_lik >= 0.5:
+            if long_lik > short_lik * 2:
+                satirlar.append(f"📉 Lik: {toplam_lik:.1f}M$ — long ezildi")
+            elif short_lik > long_lik * 2:
+                satirlar.append(f"📈 Lik: {toplam_lik:.1f}M$ — short squeeze")
+            else:
+                satirlar.append(f"↔️ Lik: {toplam_lik:.1f}M$ — dengeli")
+
+        # 4) Funding — sadece dikkat çekiciyse
+        if abs(btc_fund) >= 0.005:
+            yorum = "long kalabalık ⚠️" if btc_fund > 0.02 else ("short kalabalık ⚠️" if btc_fund < -0.01 else ("long baskın" if btc_fund > 0 else "short baskın"))
+            satirlar.append(f"💰 Funding: <b>{btc_fund:+.4f}%</b> — {yorum}")
+
+        # 5) Dikkat çeken coinler — RSI uçları
+        asiri_alim  = [(s.replace("USDT",""), v["rsi"]) for s,v in coin_verileri.items()
+                       if v.get("rsi") and v["rsi"] > 70]
+        asiri_satim = [(s.replace("USDT",""), v["rsi"]) for s,v in coin_verileri.items()
+                       if v.get("rsi") and v["rsi"] <= 30]
+        if asiri_alim:
+            str_aa = ", ".join([f"{n}({r:.0f})" for n,r in sorted(asiri_alim, key=lambda x:-x[1])])
+            satirlar.append(f"🔴 RSI alım bölgesi: <b>{str_aa}</b>")
+        if asiri_satim:
+            str_as = ", ".join([f"{n}({r:.0f})" for n,r in sorted(asiri_satim, key=lambda x:x[1])])
+            satirlar.append(f"🟢 RSI satım bölgesi: <b>{str_as}</b>")
+
+        # 6) Breakout benzerliği
+        try:
+            cvd_uyum_str = ("uyumsuz_yukari" if len(uyumsuz_yukari) >= len(uyumsuz_asagi) and uyumsuz_yukari
+                            else "uyumsuz_asagi" if uyumsuz_asagi else "uyumlu")
+            lik_taraf = ("long" if long_lik > short_lik * 1.5 else
+                         "short" if short_lik > long_lik * 1.5 else "dengeli")
+            btc_oi_d = btc_veri.get("oi_delta")
+            oi_delta = btc_oi_d["delta_pct"] if btc_oi_d else 0.0
+
+            fg_deger = None
+            try: fg_deger, _ = _trend_fear_greed()
+            except Exception: pass
+
+            benzer = _breakout_benzerlik_hesapla(
+                btc_fund, oi_delta, cvd_uyum_str, lik_taraf,
+                fg_deger=fg_deger, breadth_sayi=breadth, toplam_coin=len(coin_verileri)
+            )
+            if benzer:
+                puan_b, eslesme, olay = benzer[0]
+                ikon_b = "🚨📉" if eslesme >= 5 and olay["yon"] == "asagi" else \
+                         "🚨📈" if eslesme >= 5 else \
+                         "📉" if olay["yon"] == "asagi" else "📈"
+                satirlar.append(
+                    f"\n⚡ Geçmişe benzerlik <b>%{puan_b}</b>: {ikon_b} {olay['ad']} "
+                    f"({olay['tarih']}) — {olay['hareket_pct']:+d}% ({olay['sure_gun']}g)"
+                )
+                asagi_s = sum(1 for _,_,o in benzer if o["yon"] == "asagi")
+                yukari_s = sum(1 for _,_,o in benzer if o["yon"] == "yukari")
+                if asagi_s > yukari_s:   satirlar.append("  ⚠️ Benzer senaryolar düşüşle kapandı.")
+                elif yukari_s > asagi_s: satirlar.append("  📈 Benzer senaryolar yükselişle kapandı.")
+        except Exception as e:
+            print(f"[ANALIZ] Breakout benzerlik hatasi: {e}")
+
+        satirlar.append(f"\n<i>{zaman_str}  ·  Binance Futures + Spot</i>")
+        return "\n".join(satirlar)
+
+    except Exception as e:
+        print(f"[ANALIZ] ozet_telegram hata: {e}")
+        traceback.print_exc()
+        return f"📡 <b>Piyasa Özeti</b> — {zaman_str}\n\n⚠️ Özet üretilemedi: {e}"
 
 
 def _analiz_gonder(chat_id=None):
@@ -10412,8 +10601,8 @@ def _analiz_zamanlayici():
 # BAŞLAT
 # ==========================================
 
-BOT_VERSIYON = "v484"
-print(f"[BASLANGIC] ========== BOT VERSIYON: v484 ==========")
+BOT_VERSIYON = "v487"
+print(f"[BASLANGIC] ========== BOT VERSIYON: v487 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
 pozisyon_yukle()
