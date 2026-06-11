@@ -4,12 +4,6 @@ try:
     HAS_WS = True
 except ImportError:
     HAS_WS = False
-# bot_v517 — 11 Haziran 2026
-# Degisiklikler (v516 -> v517):
-#   1. GUNCELLEME: "olta ver" gorselinde tum font ve layout boyutlari %50 buyutuldu
-#      FONT_SZ 17->26, BOLD_SZ 18->27, TITLE_SZ 22->33
-#      PAD_X 36->54, PAD_Y 30->45, ROW_H 27->41, TF_GAP 12->18, HDR_H 52->78
-#      TF_W 68->102, VERI_W 58->87, COIN_W 100->150, GAP 12->18
 # bot_v516 — 11 Haziran 2026
 # Degisiklikler (v515 -> v516):
 #   1. GUNCELLEME: "olta ver" — metin tablo yerine gorsel (PNG) gonderir
@@ -9627,25 +9621,22 @@ def _olta_ver_tablo():
     COL_ORANGE=(255,155,50)
 
     def _ciz(side):
-        FONT_SZ=26; BOLD_SZ=27; TITLE_SZ=33
-        PAD_X=54; PAD_Y=45; ROW_H=41; TF_GAP=18; HDR_H=78
+        FONT_SZ=17; BOLD_SZ=18; TITLE_SZ=22
+        PAD_X=36; PAD_Y=30; ROW_H=27; TF_GAP=12; HDR_H=52
 
         try:
             font      = ImageFont.truetype(FONT_PATH,      FONT_SZ)
             font_bold = ImageFont.truetype(FONT_BOLD_PATH, BOLD_SZ)
             font_tf   = ImageFont.truetype(FONT_BOLD_PATH, FONT_SZ)
             font_title= ImageFont.truetype(FONT_BOLD_PATH, TITLE_SZ)
-            font_note = ImageFont.truetype(FONT_PATH,      23)
-            font_small= ImageFont.truetype(FONT_PATH,      20)
+            font_note = ImageFont.truetype(FONT_PATH,      15)
+            font_small= ImageFont.truetype(FONT_PATH,      13)
         except Exception:
             font=font_bold=font_tf=font_title=font_note=font_small=ImageFont.load_default()
 
         tmp=Image.new("RGB",(1,1)); td=ImageDraw.Draw(tmp)
 
-        TF_W=102; VERI_W=87; COIN_W=150; GAP=18
-        FOOTER_H=80
-        TITLE_H=PAD_Y+58+36+20
-        TABLE_H=HDR_H+12+4*len(TF_LIST)*ROW_H+(len(TF_LIST)-1)*TF_GAP+24
+        TF_W=68; VERI_W=58; COIN_W=100; GAP=12
         cols=["TF","VERİ"]+COINS
         col_x={}; col_w={}; x=0
         for c in cols:
@@ -9655,9 +9646,9 @@ def _olta_ver_tablo():
         total_w=int(x-GAP)
 
         ozet=footer_ozet(side)
-        FOOTER_H=80
-        TITLE_H=PAD_Y+58+36+20
-        TABLE_H=HDR_H+12+4*len(TF_LIST)*ROW_H+(len(TF_LIST)-1)*TF_GAP+24
+        FOOTER_H=58
+        TITLE_H=PAD_Y+38+24+14
+        TABLE_H=HDR_H+8+4*len(TF_LIST)*ROW_H+(len(TF_LIST)-1)*TF_GAP+18
         IMG_W=int(total_w+PAD_X*2)
         IMG_H=TITLE_H+TABLE_H+FOOTER_H
 
@@ -9667,21 +9658,21 @@ def _olta_ver_tablo():
         title_col=COL_GREEN if side=="long" else COL_RED
         title_txt="LONG OLTALAR — Tüm Coinler" if side=="long" else "SHORT OLTALAR — Tüm Coinler"
 
-        d.rectangle([(0,0),(7,IMG_H)],fill=title_col)
+        d.rectangle([(0,0),(5,IMG_H)],fill=title_col)
         ty=PAD_Y
 
         tw=td.textlength(title_txt,font=font_title)
         d.text(((IMG_W-tw)/2,ty),title_txt,font=font_title,fill=title_col)
-        ty+=58
+        ty+=38
 
         zw=td.textlength(zaman,font=font_note)
         d.text(((IMG_W-zw)/2,ty),zaman,font=font_note,fill=COL_ORANGE)
-        ty+=36
+        ty+=24
 
-        d.rectangle([(PAD_X,ty),(PAD_X+total_w,ty+2)],fill=BORDER)
-        ty+=20
+        d.rectangle([(PAD_X,ty),(PAD_X+total_w,ty+1)],fill=BORDER)
+        ty+=14
 
-        d.rectangle([(PAD_X-8,ty-6),(PAD_X+total_w+8,ty+HDR_H+6)],fill=HEADER_BG)
+        d.rectangle([(PAD_X-6,ty-4),(PAD_X+total_w+6,ty+HDR_H+4)],fill=HEADER_BG)
         for c in cols:
             cx=PAD_X+col_x[c]; cw=col_w[c]
             if c in ("TF","VERİ"):
@@ -9689,16 +9680,16 @@ def _olta_ver_tablo():
                 d.text((cx+(cw-lw)/2,ty+(HDR_H-BOLD_SZ)//2),c,font=font_bold,fill=COL_WHITE)
             else:
                 lw=td.textlength(c,font=font_bold)
-                d.text((cx+(cw-lw)/2,ty+6),c,font=font_bold,fill=COL_WHITE)
+                d.text((cx+(cw-lw)/2,ty+4),c,font=font_bold,fill=COL_WHITE)
                 fstr=fmt_val(c,fiyatlar.get(c))
                 fstr_p=f"({fstr})" if fstr!="---" else ""
                 if fstr_p:
                     fw=td.textlength(fstr_p,font=font_small)
-                    d.text((cx+(cw-fw)/2,ty+38),fstr_p,font=font_small,fill=COL_WHITE)
-        ty+=HDR_H+6
+                    d.text((cx+(cw-fw)/2,ty+28),fstr_p,font=font_small,fill=COL_WHITE)
+        ty+=HDR_H+4
 
-        d.rectangle([(PAD_X,ty),(PAD_X+total_w,ty+2)],fill=AYRAC_COL)
-        ty+=12
+        d.rectangle([(PAD_X,ty),(PAD_X+total_w,ty+1)],fill=AYRAC_COL)
+        ty+=8
 
         VERI_LABELS=["GİRİŞ","SL","TP1","TP2"]
         KEYS_LONG  =["long_giris","long_sl","long_tp1","long_tp2"]
@@ -9708,12 +9699,12 @@ def _olta_ver_tablo():
             gb=ty
             for vi,vd in enumerate(VERI_LABELS):
                 row_bg=(24,29,40) if vi%2==0 else PANEL_BG
-                d.rectangle([(PAD_X-8,ty-3),(PAD_X+total_w+8,ty+ROW_H-3)],fill=row_bg)
+                d.rectangle([(PAD_X-6,ty-2),(PAD_X+total_w+6,ty+ROW_H-2)],fill=row_bg)
                 vcol=COL_GOLD if vd=="GİRİŞ" else COL_RED if vd=="SL" else COL_GREEN
 
                 vc=PAD_X+col_x["VERİ"]; vcw=col_w["VERİ"]
                 vlw=td.textlength(vd,font=font)
-                d.text((vc+(vcw-vlw)/2,ty+5),vd,font=font,fill=vcol)
+                d.text((vc+(vcw-vlw)/2,ty+4),vd,font=font,fill=vcol)
 
                 key=KEYS_LONG[vi] if side=="long" else KEYS_SHORT[vi]
                 for c in COINS:
@@ -9722,9 +9713,9 @@ def _olta_ver_tablo():
                     cx=PAD_X+col_x[c]; cw=col_w[c]
                     s=fmt_val(c,val)
                     sw=td.textlength(s,font=font)
-                    d.text((cx+(cw-sw)/2,ty+5),s,font=font,fill=vcol)
+                    d.text((cx+(cw-sw)/2,ty+4),s,font=font,fill=vcol)
                     if vd=="GİRİŞ" and val and yakin_mi(c,val):
-                        d.text((cx+(cw+sw)/2+4,ty+5),"●",font=font,fill=COL_GOLD)
+                        d.text((cx+(cw+sw)/2+3,ty+4),"●",font=font,fill=COL_GOLD)
                 ty+=ROW_H
 
             tf_lw=td.textlength(lbl,font=font_tf)
@@ -9732,12 +9723,12 @@ def _olta_ver_tablo():
             d.text((PAD_X+col_x["TF"]+(TF_W-tf_lw)/2,tf_ty),lbl,font=font_tf,fill=COL_CYAN)
 
             if tf_i<len(TF_LIST)-1:
-                d.rectangle([(PAD_X,ty+4),(PAD_X+total_w,ty+5)],fill=(32,38,52))
+                d.rectangle([(PAD_X,ty+3),(PAD_X+total_w,ty+4)],fill=(32,38,52))
                 ty+=TF_GAP
 
-        ty+=24
-        d.rectangle([(PAD_X,ty),(PAD_X+total_w,ty+2)],fill=BORDER)
-        ty+=16
+        ty+=18
+        d.rectangle([(PAD_X,ty),(PAD_X+total_w,ty+1)],fill=BORDER)
+        ty+=12
 
         txt=ozet if ozet else "● Fiyat giriş bölgesinde olan coin yok"
         col=COL_GOLD if ozet else COL_GRAY
@@ -10974,7 +10965,7 @@ def _analiz_zamanlayici():
 # BAŞLAT
 # ==========================================
 
-BOT_VERSIYON = "v517"
+BOT_VERSIYON = "v516"
 print(f"[BASLANGIC] ========== BOT VERSIYON: v513 ==========")
 print(f"[BASLANGIC] Veri dosyasi: {VERI_DOSYASI}")
 dosyadan_yukle()
